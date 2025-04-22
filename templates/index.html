@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calorie Tracker</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 20px;
+            background-color: #f8f9fa;
+        }
+        .meal-form {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .preview-image {
+            max-width: 100%;
+            height: auto;
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .confirmation-modal {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        .macro-chart {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        .meals-table {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        .camera-container {
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        #videoElement {
+            width: 100%;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Calorie Tracker</h1>
+        
+        <!-- Meal Input Form -->
+        <div class="meal-form">
+            <div class="camera-container mb-3">
+                <video id="videoElement" autoplay playsinline style="display: none;"></video>
+                <canvas id="photoCanvas" style="display: none;"></canvas>
+                <div class="d-grid gap-2">
+                    <button id="startCamera" class="btn btn-primary">Start Camera</button>
+                    <button id="takePhoto" class="btn btn-success" style="display: none;">Take Photo</button>
+                </div>
+            </div>
+            
+            <form id="mealForm" class="mt-3">
+                <div class="mb-3">
+                    <label for="weight" class="form-label">Weight (grams)</label>
+                    <input type="number" class="form-control" id="weight" required>
+                </div>
+                <div id="previewContainer" class="mb-3" style="display: none;">
+                    <img id="preview" class="preview-image">
+                </div>
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary">Analyze Meal</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Confirmation Modal -->
+        <div id="confirmationModal" class="confirmation-modal" style="display: none;">
+            <h3>Confirm Meal Analysis</h3>
+            <div id="analysisResult" class="mb-3"></div>
+            <div class="mb-3">
+                <label for="adjustments" class="form-label">Adjustments (if needed)</label>
+                <textarea class="form-control" id="adjustments" rows="3"></textarea>
+            </div>
+            <div class="d-grid gap-2">
+                <button id="confirmMeal" class="btn btn-success">Confirm</button>
+                <button id="cancelMeal" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Date Selection -->
+        <div class="meals-table">
+            <div class="mb-3">
+                <label for="dateSelect" class="form-label">Select Date</label>
+                <input type="date" class="form-control" id="dateSelect">
+            </div>
+            
+            <!-- Meals Table -->
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Description</th>
+                            <th>Weight (g)</th>
+                            <th>Calories</th>
+                            <th>Protein</th>
+                            <th>Carbs</th>
+                            <th>Fat</th>
+                        </tr>
+                    </thead>
+                    <tbody id="mealsTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Macro Charts -->
+        <div class="macro-chart">
+            <canvas id="macroChart"></canvas>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Camera handling
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('photoCanvas');
+        const startButton = document.getElementById('startCamera');
+        const takePhotoButton = document.getElementById('takePhoto');
+        let stream = null;
+
+        startButton.addEventListener('click', async () => {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                video.srcObject = stream;
+                video.style.display = 'block';
+                startButton.style.display = 'none';
+                takePhotoButton.style.display = 'block';
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                alert('Error accessing camera. Please ensure you have granted camera permissions.');
+            }
+        });
+
+        takePhotoButton.addEventListener('click', () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            
+            // Convert canvas to blob
+            canvas.toBlob((blob) => {
+                const preview = document.getElementById('preview');
+                preview.src = URL.createObjectURL(blob);
+                document.getElementById('previewContainer').style.display = 'block';
+            }, 'image/jpeg');
+
+            // Stop camera
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            video.style.display = 'none';
+            takePhotoButton.style.display = 'none';
+            startButton.style.display = 'block';
+        });
+
+        // Form handling
+        document.getElementById('mealForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('weight', document.getElementById('weight').value);
+            
+            // Get the image from canvas
+            canvas.toBlob(async (blob) => {
+                formData.append('meal_photo', blob, 'meal.jpg');
+                
+                try {
+                    const response = await fetch('/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    if (data.error) {
+                        alert(data.error);
+                        return;
+                    }
+                    
+                    // Show confirmation modal with analysis
+                    const analysisData = JSON.parse(data.analysis);
+                    document.getElementById('analysisResult').innerHTML = `
+                        <p><strong>Description:</strong> ${analysisData.description}</p>
+                        <p><strong>Calories:</strong> ${analysisData.calories}</p>
+                        <p><strong>Protein:</strong> ${analysisData.protein}g</p>
+                        <p><strong>Carbs:</strong> ${analysisData.carbs}g</p>
+                        <p><strong>Fat:</strong> ${analysisData.fat}g</p>
+                        <img src="data:image/jpeg;base64,${data.image_data}" class="preview-image">
+                    `;
+                    
+                    document.getElementById('confirmationModal').style.display = 'block';
+                    
+                    // Store the analysis data and image data
+                    window.currentMeal = {
+                        ...analysisData,
+                        weight: document.getElementById('weight').value,
+                        image_data: data.image_data
+                    };
+                    
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Error analyzing meal');
+                }
+            }, 'image/jpeg');
+        });
+
+        // Confirmation handling
+        document.getElementById('confirmMeal').addEventListener('click', async () => {
+            const adjustments = document.getElementById('adjustments').value;
+            if (adjustments) {
+                // TODO: Send adjustments to backend for reanalysis
+                // For now, we'll just save the current analysis
+            }
+            
+            try {
+                const response = await fetch('/save_meal', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(window.currentMeal)
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('confirmationModal').style.display = 'none';
+                    document.getElementById('mealForm').reset();
+                    document.getElementById('previewContainer').style.display = 'none';
+                    loadMeals();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error saving meal');
+            }
+        });
+
+        document.getElementById('cancelMeal').addEventListener('click', () => {
+            document.getElementById('confirmationModal').style.display = 'none';
+        });
+
+        // Chart initialization
+        let macroChart = null;
+
+        function initializeChart(data) {
+            const ctx = document.getElementById('macroChart').getContext('2d');
+            
+            if (macroChart) {
+                macroChart.destroy();
+            }
+            
+            macroChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Calories', 'Protein (g)', 'Carbs (g)', 'Fat (g)'],
+                    datasets: [{
+                        label: 'Daily Totals',
+                        data: [
+                            data.totalCalories,
+                            data.totalProtein,
+                            data.totalCarbs,
+                            data.totalFat
+                        ],
+                        backgroundColor: [
+                            'rgba(255, 99, 132, 0.5)',
+                            'rgba(54, 162, 235, 0.5)',
+                            'rgba(255, 206, 86, 0.5)',
+                            'rgba(75, 192, 192, 0.5)'
+                        ],
+                        borderColor: [
+                            'rgba(255, 99, 132, 1)',
+                            'rgba(54, 162, 235, 1)',
+                            'rgba(255, 206, 86, 1)',
+                            'rgba(75, 192, 192, 1)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // Load meals for selected date
+        async function loadMeals() {
+            const date = document.getElementById('dateSelect').value;
+            try {
+                const response = await fetch(`/meals?date=${date}`);
+                const meals = await response.json();
+                
+                // Update table
+                const tableBody = document.getElementById('mealsTableBody');
+                tableBody.innerHTML = '';
+                
+                let totalCalories = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0;
+                
+                meals.forEach(meal => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${new Date(meal.date).toLocaleTimeString()}</td>
+                        <td>${meal.description}</td>
+                        <td>${meal.weight}</td>
+                        <td>${meal.calories}</td>
+                        <td>${meal.protein}</td>
+                        <td>${meal.carbs}</td>
+                        <td>${meal.fat}</td>
+                    `;
+                    tableBody.appendChild(row);
+                    
+                    totalCalories += meal.calories;
+                    totalProtein += meal.protein;
+                    totalCarbs += meal.carbs;
+                    totalFat += meal.fat;
+                });
+                
+                // Update chart
+                initializeChart({
+                    totalCalories,
+                    totalProtein,
+                    totalCarbs,
+                    totalFat
+                });
+                
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error loading meals');
+            }
+        }
+
+        // Set default date to today and load meals
+        document.getElementById('dateSelect').valueAsDate = new Date();
+        document.getElementById('dateSelect').addEventListener('change', loadMeals);
+        loadMeals();
+    </script>
+</body>
+</html> 
