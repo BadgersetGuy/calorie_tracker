@@ -178,47 +178,68 @@
             const formData = new FormData();
             formData.append('weight', document.getElementById('weight').value);
             
-            // Get the image from canvas
-            canvas.toBlob(async (blob) => {
-                formData.append('meal_photo', blob, 'meal.jpg');
-                
-                try {
-                    const response = await fetch('/upload', {
-                        method: 'POST',
-                        body: formData
-                    });
+            // Show loading state
+            const submitButton = e.target.querySelector('button[type="submit"]');
+            const originalButtonText = submitButton.innerHTML;
+            submitButton.innerHTML = 'Analyzing...';
+            submitButton.disabled = true;
+            
+            try {
+                // Get the image from canvas
+                canvas.toBlob(async (blob) => {
+                    formData.append('meal_photo', blob, 'meal.jpg');
                     
-                    const data = await response.json();
-                    if (data.error) {
-                        alert(data.error);
-                        return;
+                    try {
+                        const response = await fetch('/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        const data = await response.json();
+                        if (!response.ok) {
+                            throw new Error(data.error || 'Error analyzing meal');
+                        }
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Show confirmation modal with analysis
+                        const analysisData = JSON.parse(data.analysis);
+                        document.getElementById('analysisResult').innerHTML = `
+                            <p><strong>Description:</strong> ${analysisData.description}</p>
+                            <p><strong>Calories:</strong> ${analysisData.calories}</p>
+                            <p><strong>Protein:</strong> ${analysisData.protein}g</p>
+                            <p><strong>Carbs:</strong> ${analysisData.carbs}g</p>
+                            <p><strong>Fat:</strong> ${analysisData.fat}g</p>
+                            <img src="data:image/jpeg;base64,${data.image_data}" class="preview-image">
+                        `;
+                        
+                        document.getElementById('confirmationModal').style.display = 'block';
+                        
+                        // Store the analysis data and image data
+                        window.currentMeal = {
+                            ...analysisData,
+                            weight: document.getElementById('weight').value,
+                            image_data: data.image_data
+                        };
+                        
+                    } catch (error) {
+                        console.error('Error:', error);
+                        alert(`Error: ${error.message || 'Failed to analyze meal. Please try again.'}`);
+                    } finally {
+                        // Restore button state
+                        submitButton.innerHTML = originalButtonText;
+                        submitButton.disabled = false;
                     }
-                    
-                    // Show confirmation modal with analysis
-                    const analysisData = JSON.parse(data.analysis);
-                    document.getElementById('analysisResult').innerHTML = `
-                        <p><strong>Description:</strong> ${analysisData.description}</p>
-                        <p><strong>Calories:</strong> ${analysisData.calories}</p>
-                        <p><strong>Protein:</strong> ${analysisData.protein}g</p>
-                        <p><strong>Carbs:</strong> ${analysisData.carbs}g</p>
-                        <p><strong>Fat:</strong> ${analysisData.fat}g</p>
-                        <img src="data:image/jpeg;base64,${data.image_data}" class="preview-image">
-                    `;
-                    
-                    document.getElementById('confirmationModal').style.display = 'block';
-                    
-                    // Store the analysis data and image data
-                    window.currentMeal = {
-                        ...analysisData,
-                        weight: document.getElementById('weight').value,
-                        image_data: data.image_data
-                    };
-                    
-                } catch (error) {
-                    console.error('Error:', error);
-                    alert('Error analyzing meal');
-                }
-            }, 'image/jpeg');
+                }, 'image/jpeg', 0.8); // Reduced quality to 0.8 to help with file size
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error processing image. Please try again.');
+                // Restore button state
+                submitButton.innerHTML = originalButtonText;
+                submitButton.disabled = false;
+            }
         });
 
         // Confirmation handling

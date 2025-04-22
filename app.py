@@ -6,6 +6,11 @@ import openai
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 import base64
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -40,9 +45,13 @@ with app.app_context():
     db.create_all()
 
 def analyze_image_with_openai(image_data, weight):
-    client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-    
     try:
+        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        if not os.getenv('OPENAI_API_KEY'):
+            logger.error("OpenAI API key is not set")
+            raise ValueError("OpenAI API key is not configured")
+            
+        logger.debug(f"Sending image to OpenAI (length: {len(image_data)})")
         response = client.chat.completions.create(
             model="gpt-4-vision-preview",
             messages=[
@@ -64,9 +73,11 @@ def analyze_image_with_openai(image_data, weight):
             ],
             max_tokens=500
         )
+        logger.debug("Successfully received response from OpenAI")
         return response.choices[0].message.content
     except Exception as e:
-        return str(e)
+        logger.error(f"Error in analyze_image_with_openai: {str(e)}")
+        raise
 
 @app.route('/')
 def index():
@@ -74,26 +85,43 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_meal():
-    if 'meal_photo' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-    
-    file = request.files['meal_photo']
-    weight = float(request.form.get('weight', 0))
-    
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
-    if file:
-        # Read and encode the image
-        image_data = base64.b64encode(file.read()).decode('utf-8')
+    try:
+        logger.debug("Starting upload_meal endpoint")
+        if 'meal_photo' not in request.files:
+            logger.warning("No meal_photo in request.files")
+            return jsonify({'error': 'No file uploaded'}), 400
         
-        # Analyze image with OpenAI
-        analysis_result = analyze_image_with_openai(image_data, weight)
+        file = request.files['meal_photo']
+        weight = float(request.form.get('weight', 0))
         
-        return jsonify({
-            'analysis': analysis_result,
-            'image_data': image_data
-        })
+        if file.filename == '':
+            logger.warning("Empty filename")
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if file:
+            try:
+                # Read and encode the image
+                file_data = file.read()
+                logger.debug(f"Read file data (size: {len(file_data)} bytes)")
+                image_data = base64.b64encode(file_data).decode('utf-8')
+                logger.debug(f"Encoded image to base64 (length: {len(image_data)})")
+                
+                # Analyze image with OpenAI
+                analysis_result = analyze_image_with_openai(image_data, weight)
+                logger.debug("Successfully analyzed image")
+                
+                return jsonify({
+                    'analysis': analysis_result,
+                    'image_data': image_data
+                })
+            except Exception as e:
+                logger.error(f"Error processing file: {str(e)}")
+                return jsonify({'error': f'Error processing image: {str(e)}'}), 500
+        
+        return jsonify({'error': 'Invalid file'}), 400
+    except Exception as e:
+        logger.error(f"Unexpected error in upload_meal: {str(e)}")
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 @app.route('/save_meal', methods=['POST'])
 def save_meal():
