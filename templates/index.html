@@ -97,9 +97,20 @@
 
         <!-- Date Selection -->
         <div class="meals-table">
-            <div class="mb-3">
-                <label for="dateSelect" class="form-label">Select Date</label>
-                <input type="date" class="form-control" id="dateSelect">
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <label for="dateSelect" class="form-label">Select Date for Daily View</label>
+                    <input type="date" class="form-control" id="dateSelect">
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label">Select Date Range for Charts</label>
+                    <div class="d-flex gap-2">
+                        <input type="date" class="form-control" id="startDate">
+                        <span class="align-self-center">to</span>
+                        <input type="date" class="form-control" id="endDate">
+                        <button class="btn btn-primary" id="updateCharts">Update Charts</button>
+                    </div>
+                </div>
             </div>
             
             <!-- Meals Table -->
@@ -121,9 +132,40 @@
             </div>
         </div>
 
-        <!-- Macro Charts -->
-        <div class="macro-chart">
-            <canvas id="macroChart"></canvas>
+        <!-- Charts Section -->
+        <div class="row mt-4">
+            <!-- Daily Calories Chart -->
+            <div class="col-12 mb-4">
+                <div class="macro-chart">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h4>Calories Over Time</h4>
+                        <div class="chart-legend"></div>
+                    </div>
+                    <canvas id="caloriesChart"></canvas>
+                </div>
+            </div>
+            
+            <!-- Daily Macros Chart -->
+            <div class="col-md-6 mb-4">
+                <div class="macro-chart">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h4>Today's Macros Distribution</h4>
+                        <div class="chart-legend"></div>
+                    </div>
+                    <canvas id="todayMacrosChart"></canvas>
+                </div>
+            </div>
+            
+            <!-- Macros Over Time Chart -->
+            <div class="col-md-6 mb-4">
+                <div class="macro-chart">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h4>Macros Over Time</h4>
+                        <div class="chart-legend"></div>
+                    </div>
+                    <canvas id="macrosTimeChart"></canvas>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -311,92 +353,153 @@
         });
 
         // Chart initialization
-        let macroChart = null;
+        let caloriesChart = null;
+        let todayMacrosChart = null;
+        let macrosTimeChart = null;
 
-        function initializeChart(data) {
-            const ctx = document.getElementById('macroChart').getContext('2d');
+        function truncateText(text, maxLength = 30) {
+            if (text.length <= maxLength) return text;
+            return text.substring(0, maxLength) + '...';
+        }
+
+        function updateCharts(meals, historicalData) {
+            const ctx1 = document.getElementById('caloriesChart').getContext('2d');
+            const ctx2 = document.getElementById('todayMacrosChart').getContext('2d');
+            const ctx3 = document.getElementById('macrosTimeChart').getContext('2d');
             
-            if (macroChart) {
-                macroChart.destroy();
-            }
-            
-            macroChart = new Chart(ctx, {
-                type: 'bar',
+            // Destroy existing charts
+            if (caloriesChart) caloriesChart.destroy();
+            if (todayMacrosChart) todayMacrosChart.destroy();
+            if (macrosTimeChart) macrosTimeChart.destroy();
+
+            // Calculate daily totals
+            let totalCalories = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0;
+            meals.forEach(meal => {
+                totalCalories += meal.calories;
+                totalProtein += meal.protein;
+                totalCarbs += meal.carbs;
+                totalFat += meal.fat;
+            });
+
+            // Calories Over Time Chart
+            caloriesChart = new Chart(ctx1, {
+                type: 'line',
                 data: {
-                    labels: ['Calories', 'Protein (g)', 'Carbs (g)', 'Fat (g)'],
+                    labels: historicalData.dates,
                     datasets: [{
-                        label: 'Daily Totals',
-                        data: [
-                            data.totalCalories,
-                            data.totalProtein,
-                            data.totalCarbs,
-                            data.totalFat
-                        ],
-                        backgroundColor: [
-                            'rgba(255, 99, 132, 0.5)',
-                            'rgba(54, 162, 235, 0.5)',
-                            'rgba(255, 206, 86, 0.5)',
-                            'rgba(75, 192, 192, 0.5)'
-                        ],
-                        borderColor: [
-                            'rgba(255, 99, 132, 1)',
-                            'rgba(54, 162, 235, 1)',
-                            'rgba(255, 206, 86, 1)',
-                            'rgba(75, 192, 192, 1)'
-                        ],
-                        borderWidth: 1
+                        label: 'Daily Calories',
+                        data: historicalData.calories,
+                        borderColor: 'rgb(255, 99, 132)',
+                        tension: 0.1
                     }]
                 },
                 options: {
                     responsive: true,
                     scales: {
                         y: {
-                            beginAtZero: true
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Calories'
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Today's Macros Distribution Chart
+            todayMacrosChart = new Chart(ctx2, {
+                type: 'pie',
+                data: {
+                    labels: ['Protein', 'Carbs', 'Fat'],
+                    datasets: [{
+                        data: [totalProtein * 4, totalCarbs * 4, totalFat * 9], // Convert to calories
+                        backgroundColor: [
+                            'rgba(54, 162, 235, 0.8)',
+                            'rgba(255, 206, 86, 0.8)',
+                            'rgba(75, 192, 192, 0.8)'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Macro Distribution (in calories)'
+                        }
+                    }
+                }
+            });
+
+            // Macros Over Time Chart
+            macrosTimeChart = new Chart(ctx3, {
+                type: 'line',
+                data: {
+                    labels: historicalData.dates,
+                    datasets: [
+                        {
+                            label: 'Protein (g)',
+                            data: historicalData.protein,
+                            borderColor: 'rgb(54, 162, 235)',
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Carbs (g)',
+                            data: historicalData.carbs,
+                            borderColor: 'rgb(255, 206, 86)',
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Fat (g)',
+                            data: historicalData.fat,
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Grams'
+                            }
                         }
                     }
                 }
             });
         }
 
+        // Initialize date range picker with default values
+        function initializeDateRange() {
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setMonth(startDate.getMonth() - 1); // Default to last 30 days
+            
+            document.getElementById('startDate').valueAsDate = startDate;
+            document.getElementById('endDate').valueAsDate = endDate;
+        }
+
         // Load meals for selected date
         async function loadMeals() {
             const date = document.getElementById('dateSelect').value;
             try {
-                const response = await fetch(`/meals?date=${date}`);
-                const meals = await response.json();
+                const [mealsResponse, historyResponse] = await Promise.all([
+                    fetch(`/meals?date=${date}`),
+                    fetch(`/meal_history?start=${document.getElementById('startDate').value}&end=${document.getElementById('endDate').value}`)
+                ]);
+                
+                const meals = await mealsResponse.json();
+                const history = await historyResponse.json();
                 
                 // Update table
-                const tableBody = document.getElementById('mealsTableBody');
-                tableBody.innerHTML = '';
+                updateTable(meals);
                 
-                let totalCalories = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0;
-                
-                meals.forEach(meal => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td>${new Date(meal.date).toLocaleTimeString()}</td>
-                        <td>${meal.description}</td>
-                        <td>${meal.weight}</td>
-                        <td>${meal.calories}</td>
-                        <td>${meal.protein}</td>
-                        <td>${meal.carbs}</td>
-                        <td>${meal.fat}</td>
-                    `;
-                    tableBody.appendChild(row);
-                    
-                    totalCalories += meal.calories;
-                    totalProtein += meal.protein;
-                    totalCarbs += meal.carbs;
-                    totalFat += meal.fat;
-                });
-                
-                // Update chart
-                initializeChart({
-                    totalCalories,
-                    totalProtein,
-                    totalCarbs,
-                    totalFat
-                });
+                // Update charts
+                updateCharts(meals, history);
                 
             } catch (error) {
                 console.error('Error:', error);
@@ -404,9 +507,38 @@
             }
         }
 
-        // Set default date to today and load meals
+        function updateTable(meals) {
+            const tableBody = document.getElementById('mealsTableBody');
+            tableBody.innerHTML = '';
+            
+            meals.forEach(meal => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${new Date(meal.date).toLocaleTimeString()}</td>
+                    <td data-bs-toggle="tooltip" title="${meal.description}">
+                        ${truncateText(meal.description, 30)}
+                    </td>
+                    <td>${meal.weight}</td>
+                    <td>${Math.round(meal.calories)}</td>
+                    <td>${meal.protein.toFixed(1)}</td>
+                    <td>${meal.carbs.toFixed(1)}</td>
+                    <td>${meal.fat.toFixed(1)}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+            
+            // Initialize tooltips
+            const tooltips = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+            tooltips.forEach(tooltip => new bootstrap.Tooltip(tooltip));
+        }
+
+        // Event Listeners
         document.getElementById('dateSelect').valueAsDate = new Date();
         document.getElementById('dateSelect').addEventListener('change', loadMeals);
+        document.getElementById('updateCharts').addEventListener('click', loadMeals);
+
+        // Initialize date range and load data
+        initializeDateRange();
         loadMeals();
     </script>
 </body>

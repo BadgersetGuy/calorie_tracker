@@ -1,7 +1,7 @@
 import os
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import datetime, timedelta
 import openai
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
@@ -200,6 +200,67 @@ def get_meals():
         'fat': meal.fat,
         'image_data': meal.image_data
     } for meal in meals])
+
+@app.route('/meal_history')
+def get_meal_history():
+    try:
+        # Get date range from query parameters
+        start_date = request.args.get('start')
+        end_date = request.args.get('end')
+        
+        if not start_date or not end_date:
+            raise ValueError("Start and end dates are required")
+            
+        # Convert string dates to datetime objects
+        start_date = datetime.strptime(start_date, '%Y-%m-%d')
+        end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)  # Include the end date
+        
+        # Query meals within the date range
+        meals = Meal.query.filter(
+            Meal.date >= start_date,
+            Meal.date < end_date
+        ).order_by(Meal.date).all()
+        
+        # Group meals by date
+        meals_by_date = {}
+        
+        # Initialize all dates in the range
+        current_date = start_date
+        while current_date < end_date:
+            date_str = current_date.strftime('%Y-%m-%d')
+            meals_by_date[date_str] = {
+                'calories': 0,
+                'protein': 0,
+                'carbs': 0,
+                'fat': 0
+            }
+            current_date += timedelta(days=1)
+        
+        # Sum up the meals for each date
+        for meal in meals:
+            date_str = meal.date.strftime('%Y-%m-%d')
+            meals_by_date[date_str]['calories'] += meal.calories
+            meals_by_date[date_str]['protein'] += meal.protein
+            meals_by_date[date_str]['carbs'] += meal.carbs
+            meals_by_date[date_str]['fat'] += meal.fat
+
+        # Sort dates and prepare data for charts
+        dates = sorted(meals_by_date.keys())
+        
+        return jsonify({
+            'dates': dates,
+            'calories': [meals_by_date[date]['calories'] for date in dates],
+            'protein': [meals_by_date[date]['protein'] for date in dates],
+            'carbs': [meals_by_date[date]['carbs'] for date in dates],
+            'fat': [meals_by_date[date]['fat'] for date in dates]
+        })
+        
+    except ValueError as e:
+        logger.error(f"Invalid date parameters: {str(e)}")
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error getting meal history: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000))) 
