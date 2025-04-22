@@ -94,16 +94,38 @@
         
         <!-- Meal Input Form -->
         <div class="meal-form">
-            <div class="camera-container mb-3">
-                <video id="videoElement" autoplay playsinline style="display: none;"></video>
-                <canvas id="photoCanvas" style="display: none;"></canvas>
-                <div class="d-grid gap-2">
-                    <button id="startCamera" class="btn btn-primary">Start Camera</button>
-                    <button id="takePhoto" class="btn btn-success" style="display: none;">Take Photo</button>
+            <div class="mb-3">
+                <h4>Add Meal Photo</h4>
+                <div class="btn-group w-100 mb-3" role="group">
+                    <input type="radio" class="btn-check" name="photoMethod" id="cameraOption" autocomplete="off" checked>
+                    <label class="btn btn-outline-primary" for="cameraOption">Take Photo</label>
+                    
+                    <input type="radio" class="btn-check" name="photoMethod" id="uploadOption" autocomplete="off">
+                    <label class="btn btn-outline-primary" for="uploadOption">Upload Photo</label>
+                </div>
+
+                <!-- Camera Section -->
+                <div id="cameraSection" class="camera-container mb-3">
+                    <video id="videoElement" autoplay playsinline style="display: none;"></video>
+                    <canvas id="photoCanvas" style="display: none;"></canvas>
+                    <div class="d-grid gap-2">
+                        <button id="startCamera" class="btn btn-primary">Start Camera</button>
+                        <button id="takePhoto" class="btn btn-success" style="display: none;">Take Photo</button>
+                    </div>
+                </div>
+
+                <!-- File Upload Section -->
+                <div id="uploadSection" class="mb-3" style="display: none;">
+                    <div class="d-grid">
+                        <input type="file" class="form-control" id="photoUpload" accept="image/*" capture="environment">
+                    </div>
                 </div>
             </div>
             
             <form id="mealForm" class="mt-3">
+                <div id="previewContainer" class="mb-3" style="display: none;">
+                    <img id="preview" class="preview-image">
+                </div>
                 <div class="mb-3">
                     <label for="weight" class="form-label">Weight (grams)</label>
                     <input type="number" class="form-control" id="weight" required>
@@ -118,9 +140,6 @@
                     </label>
                     <textarea class="form-control" id="mealDetails" rows="2" 
                               placeholder="E.g., '3 eggs with whole wheat bread' or 'Thai green curry with coconut milk'"></textarea>
-                </div>
-                <div id="previewContainer" class="mb-3" style="display: none;">
-                    <img id="preview" class="preview-image">
                 </div>
                 <div class="d-grid">
                     <button type="submit" class="btn btn-primary">Analyze Meal</button>
@@ -261,6 +280,47 @@
             
             // Initialize the Bootstrap modal
             imageModal = new bootstrap.Modal(document.getElementById('imageModal'));
+
+            // Photo method selection handling
+            const cameraOption = document.getElementById('cameraOption');
+            const uploadOption = document.getElementById('uploadOption');
+            const cameraSection = document.getElementById('cameraSection');
+            const uploadSection = document.getElementById('uploadSection');
+
+            cameraOption.addEventListener('change', function() {
+                cameraSection.style.display = 'block';
+                uploadSection.style.display = 'none';
+            });
+
+            uploadOption.addEventListener('change', function() {
+                cameraSection.style.display = 'none';
+                uploadSection.style.display = 'block';
+            });
+
+            // File upload handling
+            const photoUpload = document.getElementById('photoUpload');
+            photoUpload.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const img = new Image();
+                        img.onload = function() {
+                            const canvas = document.getElementById('photoCanvas');
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0);
+
+                            const preview = document.getElementById('preview');
+                            preview.src = canvas.toDataURL('image/jpeg');
+                            document.getElementById('previewContainer').style.display = 'block';
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
         });
 
         // User management functions
@@ -362,37 +422,54 @@
             const canvas = document.getElementById('photoCanvas');
             const startButton = document.getElementById('startCamera');
             const takePhotoButton = document.getElementById('takePhoto');
+            const previewContainer = document.getElementById('previewContainer');
 
             startButton.addEventListener('click', async () => {
                 try {
-                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                    stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { 
+                            facingMode: 'environment',
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        } 
+                    });
                     video.srcObject = stream;
+                    await video.play(); // Ensure video is playing before showing
                     video.style.display = 'block';
                     startButton.style.display = 'none';
                     takePhotoButton.style.display = 'block';
                 } catch (err) {
                     console.error('Error accessing camera:', err);
-                    alert('Error accessing camera. Please ensure you have granted camera permissions.');
+                    alert('Error accessing camera: ' + (err.message || 'Please ensure you have granted camera permissions.'));
                 }
             });
 
             takePhotoButton.addEventListener('click', () => {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                canvas.getContext('2d').drawImage(video, 0, 0);
-                
-                canvas.toBlob((blob) => {
+                try {
+                    // Set canvas size to match video dimensions
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    // Draw the video frame to the canvas
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0);
+                    
+                    // Create preview
                     const preview = document.getElementById('preview');
-                    preview.src = URL.createObjectURL(blob);
-                    document.getElementById('previewContainer').style.display = 'block';
-                }, 'image/jpeg');
+                    preview.src = canvas.toDataURL('image/jpeg');
+                    previewContainer.style.display = 'block';
 
-                if (stream) {
-                    stream.getTracks().forEach(track => track.stop());
+                    // Stop camera
+                    if (stream) {
+                        stream.getTracks().forEach(track => track.stop());
+                    }
+                    video.style.display = 'none';
+                    takePhotoButton.style.display = 'none';
+                    startButton.style.display = 'block';
+                } catch (err) {
+                    console.error('Error taking photo:', err);
+                    alert('Error taking photo: ' + (err.message || 'Please try again.'));
                 }
-                video.style.display = 'none';
-                takePhotoButton.style.display = 'none';
-                startButton.style.display = 'block';
             });
         }
 
@@ -400,6 +477,17 @@
         document.getElementById('mealForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
+            if (!currentUser) {
+                alert('Please select a user first');
+                return;
+            }
+
+            const canvas = document.getElementById('photoCanvas');
+            if (!canvas.toDataURL('image/jpeg').includes('data:image/jpeg;base64,')) {
+                alert('Please take or upload a photo first');
+                return;
+            }
+
             const formData = new FormData();
             formData.append('weight', document.getElementById('weight').value);
             formData.append('meal_details', document.getElementById('mealDetails').value);
@@ -411,91 +499,96 @@
             submitButton.disabled = true;
             
             try {
-                // Get the image from canvas
-                canvas.toBlob(async (blob) => {
-                    formData.append('meal_photo', blob, 'meal.jpg');
-                    
-                    try {
-                        const response = await fetch('/upload', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        
-                        const data = await response.json();
-                        if (!response.ok) {
-                            throw new Error(data.error || 'Error analyzing meal');
+                await new Promise((resolve, reject) => {
+                    canvas.toBlob(async (blob) => {
+                        if (!blob) {
+                            reject(new Error('Failed to process image. Please try again.'));
+                            return;
                         }
+
+                        formData.append('meal_photo', blob, 'meal.jpg');
                         
-                        if (data.error) {
-                            throw new Error(data.error);
+                        try {
+                            const response = await fetch('/upload', {
+                                method: 'POST',
+                                body: formData
+                            });
+                            
+                            const data = await response.json();
+                            if (!response.ok) {
+                                throw new Error(data.error || 'Error analyzing meal');
+                            }
+                            
+                            if (data.error) {
+                                throw new Error(data.error);
+                            }
+                            
+                            // Show confirmation modal with analysis
+                            const analysisData = JSON.parse(data.analysis);
+                            document.getElementById('analysisResult').innerHTML = `
+                                <div class="alert alert-info">
+                                    <p><strong>Description:</strong> ${analysisData.description}</p>
+                                </div>
+                                <div class="row mt-3">
+                                    <div class="col-6 col-md-3">
+                                        <div class="card text-center">
+                                            <div class="card-body">
+                                                <h5 class="card-title">Calories</h5>
+                                                <p class="card-text">${Math.round(analysisData.calories)}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6 col-md-3">
+                                        <div class="card text-center">
+                                            <div class="card-body">
+                                                <h5 class="card-title">Protein</h5>
+                                                <p class="card-text">${analysisData.protein.toFixed(1)}g</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6 col-md-3">
+                                        <div class="card text-center">
+                                            <div class="card-body">
+                                                <h5 class="card-title">Carbs</h5>
+                                                <p class="card-text">${analysisData.carbs.toFixed(1)}g</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6 col-md-3">
+                                        <div class="card text-center">
+                                            <div class="card-body">
+                                                <h5 class="card-title">Fat</h5>
+                                                <p class="card-text">${analysisData.fat.toFixed(1)}g</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <img src="data:image/jpeg;base64,${data.image_data}" class="preview-image">
+                                </div>
+                            `;
+                            
+                            document.getElementById('confirmationModal').style.display = 'block';
+                            
+                            // Store the analysis data and image data
+                            window.currentMeal = {
+                                ...analysisData,
+                                weight: document.getElementById('weight').value,
+                                image_data: data.image_data
+                            };
+                            
+                            resolve();
+                        } catch (error) {
+                            console.error('Error in upload:', error);
+                            reject(error);
                         }
-                        
-                        // Show confirmation modal with analysis
-                        const analysisData = JSON.parse(data.analysis);
-                        document.getElementById('analysisResult').innerHTML = `
-                            <div class="alert alert-info">
-                                <p><strong>Description:</strong> ${analysisData.description}</p>
-                            </div>
-                            <div class="row mt-3">
-                                <div class="col-6 col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h5 class="card-title">Calories</h5>
-                                            <p class="card-text">${Math.round(analysisData.calories)}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-6 col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h5 class="card-title">Protein</h5>
-                                            <p class="card-text">${analysisData.protein.toFixed(1)}g</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-6 col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h5 class="card-title">Carbs</h5>
-                                            <p class="card-text">${analysisData.carbs.toFixed(1)}g</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-6 col-md-3">
-                                    <div class="card text-center">
-                                        <div class="card-body">
-                                            <h5 class="card-title">Fat</h5>
-                                            <p class="card-text">${analysisData.fat.toFixed(1)}g</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="mt-3">
-                                <img src="data:image/jpeg;base64,${data.image_data}" class="preview-image">
-                            </div>
-                        `;
-                        
-                        document.getElementById('confirmationModal').style.display = 'block';
-                        
-                        // Store the analysis data and image data
-                        window.currentMeal = {
-                            ...analysisData,
-                            weight: document.getElementById('weight').value,
-                            image_data: data.image_data
-                        };
-                        
-                    } catch (error) {
-                        console.error('Error:', error);
-                        alert(`Error: ${error.message || 'Failed to analyze meal. Please try again.'}`);
-                    } finally {
-                        // Restore button state
-                        submitButton.innerHTML = originalButtonText;
-                        submitButton.disabled = false;
-                    }
-                }, 'image/jpeg', 0.8);
+                    }, 'image/jpeg', 0.8);
+                });
+                
             } catch (error) {
                 console.error('Error:', error);
-                alert('Error processing image. Please try again.');
+                alert(error.message || 'Error processing image. Please try again.');
+            } finally {
                 // Restore button state
                 submitButton.innerHTML = originalButtonText;
                 submitButton.disabled = false;
