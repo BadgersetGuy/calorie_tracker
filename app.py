@@ -62,7 +62,7 @@ def analyze_image_with_openai(image_data, weight):
                     "content": [
                         {
                             "type": "text",
-                            "text": f"This is a meal weighing {weight}g. Please identify the ingredients and estimate the macronutrients (protein, carbs, fat) and total calories. Return the response in JSON format with keys: description, calories, protein, carbs, fat"
+                            "text": f"Analyze this meal that weighs {weight}g. Identify the ingredients and estimate its nutritional content."
                         },
                         {
                             "type": "image_url",
@@ -73,10 +73,48 @@ def analyze_image_with_openai(image_data, weight):
                     ]
                 }
             ],
+            functions=[
+                {
+                    "name": "analyze_meal",
+                    "description": "Analyze a meal's ingredients and nutritional content",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "description": {
+                                "type": "string",
+                                "description": "Detailed description of the identified ingredients and meal composition"
+                            },
+                            "calories": {
+                                "type": "number",
+                                "description": "Total calories in the meal"
+                            },
+                            "protein": {
+                                "type": "number",
+                                "description": "Protein content in grams"
+                            },
+                            "carbs": {
+                                "type": "number",
+                                "description": "Carbohydrate content in grams"
+                            },
+                            "fat": {
+                                "type": "number",
+                                "description": "Fat content in grams"
+                            }
+                        },
+                        "required": ["description", "calories", "protein", "carbs", "fat"]
+                    }
+                }
+            ],
+            function_call={"name": "analyze_meal"},
             max_tokens=5000
         )
         logger.debug("Successfully received response from OpenAI")
-        return response.choices[0].message['content']
+        
+        # Extract the function call arguments which will be our structured output
+        function_args = response.choices[0].message['function_call']['arguments']
+        logger.debug(f"Function arguments: {function_args}")
+        return function_args
+        
     except Exception as e:
         logger.error(f"Error in analyze_image_with_openai: {str(e)}")
         raise
