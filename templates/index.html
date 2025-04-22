@@ -265,11 +265,8 @@
         Chart.register(ChartDataLabels);
         
         // Initialize everything after DOM is fully loaded
-        document.addEventListener('DOMContentLoaded', function() {
-            // Load current user first
-            loadCurrentUser();
-            
-            // Initialize date handling
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Initialize date handling first
             document.getElementById('dateSelect').valueAsDate = new Date();
             document.getElementById('dateSelect').addEventListener('change', loadMeals);
             document.getElementById('updateCharts').addEventListener('click', loadMeals);
@@ -280,47 +277,9 @@
             
             // Initialize the Bootstrap modal
             imageModal = new bootstrap.Modal(document.getElementById('imageModal'));
-
-            // Photo method selection handling
-            const cameraOption = document.getElementById('cameraOption');
-            const uploadOption = document.getElementById('uploadOption');
-            const cameraSection = document.getElementById('cameraSection');
-            const uploadSection = document.getElementById('uploadSection');
-
-            cameraOption.addEventListener('change', function() {
-                cameraSection.style.display = 'block';
-                uploadSection.style.display = 'none';
-            });
-
-            uploadOption.addEventListener('change', function() {
-                cameraSection.style.display = 'none';
-                uploadSection.style.display = 'block';
-            });
-
-            // File upload handling
-            const photoUpload = document.getElementById('photoUpload');
-            photoUpload.addEventListener('change', function(e) {
-                const file = e.target.files[0];
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        const img = new Image();
-                        img.onload = function() {
-                            const canvas = document.getElementById('photoCanvas');
-                            canvas.width = img.width;
-                            canvas.height = img.height;
-                            const ctx = canvas.getContext('2d');
-                            ctx.drawImage(img, 0, 0);
-
-                            const preview = document.getElementById('preview');
-                            preview.src = canvas.toDataURL('image/jpeg');
-                            document.getElementById('previewContainer').style.display = 'block';
-                        };
-                        img.src = e.target.result;
-                    };
-                    reader.readAsDataURL(file);
-                }
-            });
+            
+            // Initialize user last (this will trigger loadMeals if a user exists)
+            await loadCurrentUser();
         });
 
         // User management functions
@@ -331,7 +290,7 @@
                 document.getElementById('currentUsername').textContent = currentUser.username;
                 document.getElementById('currentUser').style.display = 'block';
                 document.getElementById('userSelection').style.display = 'none';
-                loadMeals(); // Load meals for current user
+                await loadMeals(); // Ensure meals are loaded after user is restored
             } else {
                 document.getElementById('currentUser').style.display = 'none';
                 document.getElementById('userSelection').style.display = 'block';
@@ -371,7 +330,7 @@
                 const data = await response.json();
                 if (response.ok) {
                     await loadUsers(); // Reload the user list
-                    setCurrentUser(data);
+                    await setCurrentUser(data);
                     document.getElementById('newUsername').value = ''; // Clear the input
                 } else {
                     alert(data.error || 'Error creating user');
@@ -391,16 +350,16 @@
             }
 
             const username = select.options[select.selectedIndex].text;
-            setCurrentUser({ id: userId, username });
+            await setCurrentUser({ id: userId, username });
         }
 
-        function setCurrentUser(user) {
+        async function setCurrentUser(user) {
             currentUser = user;
             localStorage.setItem('currentUser', JSON.stringify(user));
             document.getElementById('currentUsername').textContent = user.username;
             document.getElementById('currentUser').style.display = 'block';
             document.getElementById('userSelection').style.display = 'none';
-            loadMeals(); // Reload meals for new user
+            await loadMeals(); // Ensure meals are loaded after user is set
         }
 
         async function switchUser() {
