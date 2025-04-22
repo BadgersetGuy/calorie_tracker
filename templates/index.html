@@ -579,17 +579,14 @@
                             
                             resolve();
                         } catch (error) {
-                            console.error('Error in upload:', error);
                             reject(error);
                         }
                     }, 'image/jpeg', 0.8);
                 });
-                
             } catch (error) {
                 console.error('Error:', error);
                 alert(error.message || 'Error processing image. Please try again.');
             } finally {
-                // Restore button state
                 submitButton.innerHTML = originalButtonText;
                 submitButton.disabled = false;
             }
@@ -602,12 +599,6 @@
                 return;
             }
 
-            const adjustments = document.getElementById('adjustments').value;
-            if (adjustments) {
-                // TODO: Send adjustments to backend for reanalysis
-                // For now, we'll just save the current analysis
-            }
-            
             try {
                 const response = await fetch('/save_meal', {
                     method: 'POST',
@@ -625,11 +616,13 @@
                     document.getElementById('confirmationModal').style.display = 'none';
                     document.getElementById('mealForm').reset();
                     document.getElementById('previewContainer').style.display = 'none';
-                    loadMeals();
+                    await loadMeals(); // Reload meals after successful save
+                } else {
+                    throw new Error(data.error || 'Failed to save meal');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('Error saving meal');
+                alert('Error saving meal: ' + (error.message || 'Please try again'));
             }
         });
 
@@ -817,7 +810,7 @@
                         y: {
                             beginAtZero: true,
                             title: {
-                                display: true,
+                                display: false,
                                 text: 'Grams'
                             }
                         }

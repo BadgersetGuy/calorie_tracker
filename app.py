@@ -95,7 +95,7 @@ def analyze_image_with_openai(image_data, weight, meal_details=None):
                         "properties": {
                             "description": {
                                 "type": "string",
-                                "description": "Concise description of the identified ingredients and meal composition"
+                                "description": "Concise description of the identified ingredients and meal composition. Also a breakdown of each ingredients calories and estimated weight from total weight of the meal."
                             },
                             "calories": {
                                 "type": "number",
