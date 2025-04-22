@@ -55,7 +55,7 @@ def analyze_image_with_openai(image_data, weight):
             
         logger.debug(f"Sending image to OpenAI (length: {len(image_data)})")
         response = openai.ChatCompletion.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4.1",
             messages=[
                 {
                     "role": "user",
@@ -73,7 +73,7 @@ def analyze_image_with_openai(image_data, weight):
                     ]
                 }
             ],
-            max_tokens=500
+            max_tokens=5000
         )
         logger.debug("Successfully received response from OpenAI")
         return response.choices[0].message['content']
