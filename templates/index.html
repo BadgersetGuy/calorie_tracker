@@ -278,6 +278,47 @@
             // Initialize the Bootstrap modal
             imageModal = new bootstrap.Modal(document.getElementById('imageModal'));
             
+            // Photo method selection handling
+            const cameraOption = document.getElementById('cameraOption');
+            const uploadOption = document.getElementById('uploadOption');
+            const cameraSection = document.getElementById('cameraSection');
+            const uploadSection = document.getElementById('uploadSection');
+
+            cameraOption.addEventListener('change', function() {
+                cameraSection.style.display = 'block';
+                uploadSection.style.display = 'none';
+            });
+
+            uploadOption.addEventListener('change', function() {
+                cameraSection.style.display = 'none';
+                uploadSection.style.display = 'block';
+            });
+
+            // File upload handling
+            const photoUpload = document.getElementById('photoUpload');
+            photoUpload.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const img = new Image();
+                        img.onload = function() {
+                            const canvas = document.getElementById('photoCanvas');
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0);
+
+                            const preview = document.getElementById('preview');
+                            preview.src = canvas.toDataURL('image/jpeg');
+                            document.getElementById('previewContainer').style.display = 'block';
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+            
             // Initialize user last (this will trigger loadMeals if a user exists)
             await loadCurrentUser();
         });
@@ -611,9 +652,9 @@
 
             // Process dates for charts
             const chartData = {
-                dates: historicalData.dates,  // Keep as YYYY-MM-DD strings
+                dates: historicalData.dates,
                 calories: historicalData.dates.map((date, i) => ({
-                    x: date,  // Keep as YYYY-MM-DD string
+                    x: date,
                     y: historicalData.calories[i]
                 })),
                 protein: historicalData.dates.map((date, i) => ({
@@ -652,6 +693,11 @@
                 },
                 options: {
                     responsive: true,
+                    plugins: {
+                        datalabels: {
+                            display: false // Hide data labels on line chart
+                        }
+                    },
                     scales: {
                         x: {
                             type: 'time',
@@ -678,12 +724,19 @@
             });
 
             // Today's Macros Distribution Chart
+            const macroCalories = {
+                protein: totalProtein * 4,
+                carbs: totalCarbs * 4,
+                fat: totalFat * 9
+            };
+            const totalMacroCalories = macroCalories.protein + macroCalories.carbs + macroCalories.fat;
+
             todayMacrosChart = new Chart(ctx2, {
                 type: 'pie',
                 data: {
                     labels: ['Protein', 'Carbs', 'Fat'],
                     datasets: [{
-                        data: [totalProtein * 4, totalCarbs * 4, totalFat * 9],
+                        data: [macroCalories.protein, macroCalories.carbs, macroCalories.fat],
                         backgroundColor: [
                             'rgba(54, 162, 235, 0.8)',
                             'rgba(255, 206, 86, 0.8)',
@@ -694,31 +747,23 @@
                 options: {
                     responsive: true,
                     plugins: {
-                        title: {
-                            display: true,
-                            text: 'Macro Distribution (in calories)'
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    const value = context.raw;
-                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                    const percentage = ((value / total) * 100).toFixed(1);
-                                    const label = context.label;
-                                    const calories = value.toFixed(0);
-                                    return `${label}: ${calories} cal (${percentage}%)`;
-                                }
-                            }
-                        },
                         datalabels: {
                             formatter: (value, ctx) => {
-                                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                                const percentage = ((value / total) * 100).toFixed(1);
+                                const percentage = ((value / totalMacroCalories) * 100).toFixed(1);
                                 return `${percentage}%`;
                             },
                             color: '#fff',
                             font: {
                                 weight: 'bold'
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const value = context.raw;
+                                    const percentage = ((value / totalMacroCalories) * 100).toFixed(1);
+                                    return `${context.label}: ${Math.round(value)} cal (${percentage}%)`;
+                                }
                             }
                         }
                     }
@@ -752,6 +797,11 @@
                 },
                 options: {
                     responsive: true,
+                    plugins: {
+                        datalabels: {
+                            display: false // Hide data labels on line chart
+                        }
+                    },
                     scales: {
                         x: {
                             type: 'time',
