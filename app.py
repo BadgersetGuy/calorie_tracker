@@ -46,10 +46,12 @@ with app.app_context():
 
 def analyze_image_with_openai(image_data, weight):
     try:
-        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         if not os.getenv('OPENAI_API_KEY'):
             logger.error("OpenAI API key is not set")
             raise ValueError("OpenAI API key is not configured")
+        
+        # Initialize OpenAI client with just the API key
+        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
             
         logger.debug(f"Sending image to OpenAI (length: {len(image_data)})")
         response = client.chat.completions.create(
