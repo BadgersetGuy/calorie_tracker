@@ -740,33 +740,56 @@
             // Set to beginning of current week (Sunday)
             startDate.setDate(startDate.getDate() - startDate.getDay());
             
-            document.getElementById('startDate').valueAsDate = startDate;
-            document.getElementById('endDate').valueAsDate = endDate;
+            const startInput = document.getElementById('startDate');
+            const endInput = document.getElementById('endDate');
+            
+            // Format dates as YYYY-MM-DD
+            startInput.value = startDate.toISOString().split('T')[0];
+            endInput.value = endDate.toISOString().split('T')[0];
+            
+            // Also set the single date select to today
+            document.getElementById('dateSelect').valueAsDate = new Date();
         }
 
         // Load meals for selected date
         async function loadMeals() {
-            if (!currentUser) return;
+            if (!currentUser) {
+                console.log('No user selected');
+                return;
+            }
             
             const date = document.getElementById('dateSelect').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            if (!date || !startDate || !endDate) {
+                console.log('Missing date parameters');
+                return;
+            }
+
             try {
                 const [mealsResponse, historyResponse] = await Promise.all([
                     fetch(`/meals?date=${date}&user_id=${currentUser.id}`),
-                    fetch(`/meal_history?start=${document.getElementById('startDate').value}&end=${document.getElementById('endDate').value}&user_id=${currentUser.id}`)
+                    fetch(`/meal_history?start=${startDate}&end=${endDate}&user_id=${currentUser.id}`)
                 ]);
                 
+                if (!mealsResponse.ok) {
+                    throw new Error(`Error loading meals: ${(await mealsResponse.json()).error}`);
+                }
+                if (!historyResponse.ok) {
+                    throw new Error(`Error loading history: ${(await historyResponse.json()).error}`);
+                }
+
                 const meals = await mealsResponse.json();
                 const history = await historyResponse.json();
                 
-                // Update table
+                // Update table and charts
                 updateTable(meals);
-                
-                // Update charts
                 updateCharts(meals, history);
                 
             } catch (error) {
                 console.error('Error:', error);
-                alert('Error loading meals');
+                alert(error.message || 'Error loading meals');
             }
         }
 
