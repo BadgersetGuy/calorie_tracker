@@ -210,49 +210,157 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
     <script>
-        // Register the plugin
-        Chart.register(ChartDataLabels);
-        
-        // Camera handling
-        const video = document.getElementById('videoElement');
-        const canvas = document.getElementById('photoCanvas');
-        const startButton = document.getElementById('startCamera');
-        const takePhotoButton = document.getElementById('takePhoto');
+        // Global variables
+        let currentUser = null;
         let stream = null;
-
-        startButton.addEventListener('click', async () => {
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-                video.srcObject = stream;
-                video.style.display = 'block';
-                startButton.style.display = 'none';
-                takePhotoButton.style.display = 'block';
-            } catch (err) {
-                console.error('Error accessing camera:', err);
-                alert('Error accessing camera. Please ensure you have granted camera permissions.');
-            }
-        });
-
-        takePhotoButton.addEventListener('click', () => {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            canvas.getContext('2d').drawImage(video, 0, 0);
+        
+        // Initialize everything after DOM is fully loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load current user first
+            loadCurrentUser();
             
-            // Convert canvas to blob
-            canvas.toBlob((blob) => {
-                const preview = document.getElementById('preview');
-                preview.src = URL.createObjectURL(blob);
-                document.getElementById('previewContainer').style.display = 'block';
-            }, 'image/jpeg');
-
-            // Stop camera
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
-            video.style.display = 'none';
-            takePhotoButton.style.display = 'none';
-            startButton.style.display = 'block';
+            // Initialize date handling
+            document.getElementById('dateSelect').valueAsDate = new Date();
+            document.getElementById('dateSelect').addEventListener('change', loadMeals);
+            document.getElementById('updateCharts').addEventListener('click', loadMeals);
+            initializeDateRange();
+            
+            // Initialize camera handling
+            initializeCamera();
         });
+
+        // User management functions
+        async function loadCurrentUser() {
+            const savedUser = localStorage.getItem('currentUser');
+            if (savedUser) {
+                currentUser = JSON.parse(savedUser);
+                document.getElementById('currentUsername').textContent = currentUser.username;
+                document.getElementById('currentUser').style.display = 'block';
+                document.getElementById('userSelection').style.display = 'none';
+                loadMeals(); // Load meals for current user
+            } else {
+                document.getElementById('currentUser').style.display = 'none';
+                document.getElementById('userSelection').style.display = 'block';
+                await loadUsers(); // Load user list if no current user
+            }
+        }
+
+        async function loadUsers() {
+            try {
+                const response = await fetch('/users');
+                const users = await response.json();
+                const select = document.getElementById('existingUsers');
+                select.innerHTML = '<option value="">Select a user...</option>' +
+                    users.map(user => `<option value="${user.id}">${user.username}</option>`).join('');
+            } catch (error) {
+                console.error('Error loading users:', error);
+                alert('Error loading users');
+            }
+        }
+
+        async function createUser() {
+            const username = document.getElementById('newUsername').value.trim();
+            if (!username) {
+                alert('Please enter a username');
+                return;
+            }
+
+            try {
+                const response = await fetch('/users', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    await loadUsers(); // Reload the user list
+                    setCurrentUser(data);
+                    document.getElementById('newUsername').value = ''; // Clear the input
+                } else {
+                    alert(data.error || 'Error creating user');
+                }
+            } catch (error) {
+                console.error('Error creating user:', error);
+                alert('Error creating user');
+            }
+        }
+
+        async function selectUser() {
+            const select = document.getElementById('existingUsers');
+            const userId = select.value;
+            if (!userId) {
+                alert('Please select a user');
+                return;
+            }
+
+            const username = select.options[select.selectedIndex].text;
+            setCurrentUser({ id: userId, username });
+        }
+
+        function setCurrentUser(user) {
+            currentUser = user;
+            localStorage.setItem('currentUser', JSON.stringify(user));
+            document.getElementById('currentUsername').textContent = user.username;
+            document.getElementById('currentUser').style.display = 'block';
+            document.getElementById('userSelection').style.display = 'none';
+            loadMeals(); // Reload meals for new user
+        }
+
+        async function switchUser() {
+            currentUser = null;
+            localStorage.removeItem('currentUser');
+            document.getElementById('currentUser').style.display = 'none';
+            document.getElementById('userSelection').style.display = 'block';
+            document.getElementById('mealsTableBody').innerHTML = '';
+            // Clear charts
+            if (caloriesChart) caloriesChart.destroy();
+            if (todayMacrosChart) todayMacrosChart.destroy();
+            if (macrosTimeChart) macrosTimeChart.destroy();
+            await loadUsers(); // Reload user list
+        }
+
+        // Camera handling
+        function initializeCamera() {
+            const video = document.getElementById('videoElement');
+            const canvas = document.getElementById('photoCanvas');
+            const startButton = document.getElementById('startCamera');
+            const takePhotoButton = document.getElementById('takePhoto');
+
+            startButton.addEventListener('click', async () => {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                    video.srcObject = stream;
+                    video.style.display = 'block';
+                    startButton.style.display = 'none';
+                    takePhotoButton.style.display = 'block';
+                } catch (err) {
+                    console.error('Error accessing camera:', err);
+                    alert('Error accessing camera. Please ensure you have granted camera permissions.');
+                }
+            });
+
+            takePhotoButton.addEventListener('click', () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+                
+                canvas.toBlob((blob) => {
+                    const preview = document.getElementById('preview');
+                    preview.src = URL.createObjectURL(blob);
+                    document.getElementById('previewContainer').style.display = 'block';
+                }, 'image/jpeg');
+
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                video.style.display = 'none';
+                takePhotoButton.style.display = 'none';
+                startButton.style.display = 'block';
+            });
+        }
 
         // Form handling
         document.getElementById('mealForm').addEventListener('submit', async (e) => {
@@ -651,108 +759,6 @@
             // Initialize tooltips
             const tooltips = document.querySelectorAll('[data-bs-toggle="tooltip"]');
             tooltips.forEach(tooltip => new bootstrap.Tooltip(tooltip));
-        }
-
-        // Event Listeners
-        document.getElementById('dateSelect').valueAsDate = new Date();
-        document.getElementById('dateSelect').addEventListener('change', loadMeals);
-        document.getElementById('updateCharts').addEventListener('click', loadMeals);
-
-        // Initialize date range and load data
-        initializeDateRange();
-        loadMeals();
-
-        // Add this before other JavaScript code
-        let currentUser = null;
-
-        // Load current user from localStorage
-        function loadCurrentUser() {
-            const savedUser = localStorage.getItem('currentUser');
-            if (savedUser) {
-                currentUser = JSON.parse(savedUser);
-                document.getElementById('currentUsername').textContent = currentUser.username;
-                document.getElementById('currentUser').style.display = 'block';
-                document.getElementById('userSelection').style.display = 'none';
-                loadMeals(); // Load meals for current user
-            } else {
-                loadUsers(); // Load user list if no current user
-            }
-        }
-
-        // Load users into select dropdown
-        async function loadUsers() {
-            try {
-                const response = await fetch('/users');
-                const users = await response.json();
-                const select = document.getElementById('existingUsers');
-                select.innerHTML = '<option value="">Select a user...</option>' +
-                    users.map(user => `<option value="${user.id}">${user.username}</option>`).join('');
-            } catch (error) {
-                console.error('Error loading users:', error);
-                alert('Error loading users');
-            }
-        }
-
-        // Create new user
-        async function createUser() {
-            const username = document.getElementById('newUsername').value.trim();
-            if (!username) {
-                alert('Please enter a username');
-                return;
-            }
-
-            try {
-                const response = await fetch('/users', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ username })
-                });
-
-                const data = await response.json();
-                if (response.ok) {
-                    setCurrentUser(data);
-                } else {
-                    alert(data.error || 'Error creating user');
-                }
-            } catch (error) {
-                console.error('Error creating user:', error);
-                alert('Error creating user');
-            }
-        }
-
-        // Select existing user
-        async function selectUser() {
-            const select = document.getElementById('existingUsers');
-            const userId = select.value;
-            if (!userId) {
-                alert('Please select a user');
-                return;
-            }
-
-            const username = select.options[select.selectedIndex].text;
-            setCurrentUser({ id: userId, username });
-        }
-
-        // Set current user and update UI
-        function setCurrentUser(user) {
-            currentUser = user;
-            localStorage.setItem('currentUser', JSON.stringify(user));
-            document.getElementById('currentUsername').textContent = user.username;
-            document.getElementById('currentUser').style.display = 'block';
-            document.getElementById('userSelection').style.display = 'none';
-            loadMeals(); // Reload meals for new user
-        }
-
-        // Switch user (logout)
-        function switchUser() {
-            currentUser = null;
-            localStorage.removeItem('currentUser');
-            document.getElementById('currentUser').style.display = 'none';
-            document.getElementById('userSelection').style.display = 'block';
-            document.getElementById('mealsTableBody').innerHTML = '';
-            loadUsers();
         }
     </script>
 </body>
