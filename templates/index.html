@@ -54,6 +54,31 @@
 </head>
 <body>
     <div class="container">
+        <!-- User Management Section -->
+        <div id="userSection" class="meal-form mb-4">
+            <div id="currentUser" style="display: none;">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h4 class="mb-0">Current User: <span id="currentUsername"></span></h4>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="switchUser()">Switch User</button>
+                </div>
+            </div>
+            <div id="userSelection" class="mb-3">
+                <h4>Select or Create User</h4>
+                <div class="mb-3">
+                    <label for="existingUsers" class="form-label">Existing Users</label>
+                    <select class="form-select mb-2" id="existingUsers"></select>
+                    <button class="btn btn-primary" onclick="selectUser()">Select User</button>
+                </div>
+                <div class="mb-3">
+                    <label for="newUsername" class="form-label">Create New User</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="newUsername" placeholder="Enter username">
+                        <button class="btn btn-success" onclick="createUser()">Create User</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <h1 class="text-center mb-4">Calorie Tracker</h1>
         
         <!-- Meal Input Form -->
@@ -337,6 +362,11 @@
 
         // Confirmation handling
         document.getElementById('confirmMeal').addEventListener('click', async () => {
+            if (!currentUser) {
+                alert('Please select a user first');
+                return;
+            }
+
             const adjustments = document.getElementById('adjustments').value;
             if (adjustments) {
                 // TODO: Send adjustments to backend for reanalysis
@@ -349,7 +379,10 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(window.currentMeal)
+                    body: JSON.stringify({
+                        ...window.currentMeal,
+                        user_id: currentUser.id
+                    })
                 });
                 
                 const data = await response.json();
@@ -391,21 +424,21 @@
 
             // Process dates for charts
             const chartData = {
-                dates: historicalData.dates.map(date => new Date(date)),
+                dates: historicalData.dates,  // Keep as YYYY-MM-DD strings
                 calories: historicalData.dates.map((date, i) => ({
-                    x: new Date(date),
+                    x: date,  // Keep as YYYY-MM-DD string
                     y: historicalData.calories[i]
                 })),
                 protein: historicalData.dates.map((date, i) => ({
-                    x: new Date(date),
+                    x: date,
                     y: historicalData.protein[i]
                 })),
                 carbs: historicalData.dates.map((date, i) => ({
-                    x: new Date(date),
+                    x: date,
                     y: historicalData.carbs[i]
                 })),
                 fat: historicalData.dates.map((date, i) => ({
-                    x: new Date(date),
+                    x: date,
                     y: historicalData.fat[i]
                 }))
             };
@@ -437,6 +470,7 @@
                             type: 'time',
                             time: {
                                 unit: 'day',
+                                parser: 'yyyy-MM-dd',
                                 displayFormats: {
                                     day: 'MMM d'
                                 }
@@ -536,6 +570,7 @@
                             type: 'time',
                             time: {
                                 unit: 'day',
+                                parser: 'yyyy-MM-dd',
                                 displayFormats: {
                                     day: 'MMM d'
                                 }
@@ -569,11 +604,13 @@
 
         // Load meals for selected date
         async function loadMeals() {
+            if (!currentUser) return;
+            
             const date = document.getElementById('dateSelect').value;
             try {
                 const [mealsResponse, historyResponse] = await Promise.all([
-                    fetch(`/meals?date=${date}`),
-                    fetch(`/meal_history?start=${document.getElementById('startDate').value}&end=${document.getElementById('endDate').value}`)
+                    fetch(`/meals?date=${date}&user_id=${currentUser.id}`),
+                    fetch(`/meal_history?start=${document.getElementById('startDate').value}&end=${document.getElementById('endDate').value}&user_id=${currentUser.id}`)
                 ]);
                 
                 const meals = await mealsResponse.json();
@@ -624,6 +661,99 @@
         // Initialize date range and load data
         initializeDateRange();
         loadMeals();
+
+        // Add this before other JavaScript code
+        let currentUser = null;
+
+        // Load current user from localStorage
+        function loadCurrentUser() {
+            const savedUser = localStorage.getItem('currentUser');
+            if (savedUser) {
+                currentUser = JSON.parse(savedUser);
+                document.getElementById('currentUsername').textContent = currentUser.username;
+                document.getElementById('currentUser').style.display = 'block';
+                document.getElementById('userSelection').style.display = 'none';
+                loadMeals(); // Load meals for current user
+            } else {
+                loadUsers(); // Load user list if no current user
+            }
+        }
+
+        // Load users into select dropdown
+        async function loadUsers() {
+            try {
+                const response = await fetch('/users');
+                const users = await response.json();
+                const select = document.getElementById('existingUsers');
+                select.innerHTML = '<option value="">Select a user...</option>' +
+                    users.map(user => `<option value="${user.id}">${user.username}</option>`).join('');
+            } catch (error) {
+                console.error('Error loading users:', error);
+                alert('Error loading users');
+            }
+        }
+
+        // Create new user
+        async function createUser() {
+            const username = document.getElementById('newUsername').value.trim();
+            if (!username) {
+                alert('Please enter a username');
+                return;
+            }
+
+            try {
+                const response = await fetch('/users', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    setCurrentUser(data);
+                } else {
+                    alert(data.error || 'Error creating user');
+                }
+            } catch (error) {
+                console.error('Error creating user:', error);
+                alert('Error creating user');
+            }
+        }
+
+        // Select existing user
+        async function selectUser() {
+            const select = document.getElementById('existingUsers');
+            const userId = select.value;
+            if (!userId) {
+                alert('Please select a user');
+                return;
+            }
+
+            const username = select.options[select.selectedIndex].text;
+            setCurrentUser({ id: userId, username });
+        }
+
+        // Set current user and update UI
+        function setCurrentUser(user) {
+            currentUser = user;
+            localStorage.setItem('currentUser', JSON.stringify(user));
+            document.getElementById('currentUsername').textContent = user.username;
+            document.getElementById('currentUser').style.display = 'block';
+            document.getElementById('userSelection').style.display = 'none';
+            loadMeals(); // Reload meals for new user
+        }
+
+        // Switch user (logout)
+        function switchUser() {
+            currentUser = null;
+            localStorage.removeItem('currentUser');
+            document.getElementById('currentUser').style.display = 'none';
+            document.getElementById('userSelection').style.display = 'block';
+            document.getElementById('mealsTableBody').innerHTML = '';
+            loadUsers();
+        }
     </script>
 </body>
 </html> 

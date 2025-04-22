@@ -29,6 +29,12 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 db = SQLAlchemy(app)
 
 # Database Models
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    meals = db.relationship('Meal', backref='user', lazy=True)
+
 class Meal(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -39,6 +45,7 @@ class Meal(db.Model):
     carbs = db.Column(db.Float, nullable=False)
     fat = db.Column(db.Float, nullable=False)
     image_data = db.Column(db.Text, nullable=True)  # Store image as base64
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
 # Create database tables
 with app.app_context():
@@ -88,7 +95,7 @@ def analyze_image_with_openai(image_data, weight, meal_details=None):
                         "properties": {
                             "description": {
                                 "type": "string",
-                                "description": "Detailed description of the identified ingredients and meal composition"
+                                "description": "Concise description of the identified ingredients and meal composition"
                             },
                             "calories": {
                                 "type": "number",
@@ -177,8 +184,13 @@ def upload_meal():
 @app.route('/save_meal', methods=['POST'])
 def save_meal():
     data = request.json
+    user_id = data.get('user_id')
+    
+    if not user_id:
+        return jsonify({'error': 'User ID is required'}), 400
     
     new_meal = Meal(
+        user_id=user_id,
         weight=data['weight'],
         description=data['description'],
         calories=data['calories'],
@@ -196,8 +208,14 @@ def save_meal():
 @app.route('/meals')
 def get_meals():
     date = request.args.get('date', datetime.today().strftime('%Y-%m-%d'))
+    user_id = request.args.get('user_id')
+    
+    if not user_id:
+        return jsonify({'error': 'User ID is required'}), 400
+    
     meals = Meal.query.filter(
-        db.func.date(Meal.date) == date
+        db.func.date(Meal.date) == date,
+        Meal.user_id == user_id
     ).all()
     
     return jsonify([{
@@ -215,21 +233,23 @@ def get_meals():
 @app.route('/meal_history')
 def get_meal_history():
     try:
-        # Get date range from query parameters
+        # Get date range and user_id from query parameters
         start_date = request.args.get('start')
         end_date = request.args.get('end')
+        user_id = request.args.get('user_id')
         
-        if not start_date or not end_date:
-            raise ValueError("Start and end dates are required")
+        if not all([start_date, end_date, user_id]):
+            raise ValueError("Start date, end date, and user ID are required")
             
         # Convert string dates to datetime objects
         start_date = datetime.strptime(start_date, '%Y-%m-%d')
         end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)  # Include the end date
         
-        # Query meals within the date range
+        # Query meals within the date range for specific user
         meals = Meal.query.filter(
             Meal.date >= start_date,
-            Meal.date < end_date
+            Meal.date < end_date,
+            Meal.user_id == user_id
         ).order_by(Meal.date).all()
         
         # Group meals by date
@@ -259,7 +279,7 @@ def get_meal_history():
         dates = sorted(meals_by_date.keys())
         
         return jsonify({
-            'dates': dates,
+            'dates': dates,  # These are now in YYYY-MM-DD format
             'calories': [meals_by_date[date]['calories'] for date in dates],
             'protein': [meals_by_date[date]['protein'] for date in dates],
             'carbs': [meals_by_date[date]['carbs'] for date in dates],
@@ -272,6 +292,38 @@ def get_meal_history():
     except Exception as e:
         logger.error(f"Error getting meal history: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+# User management endpoints
+@app.route('/users', methods=['GET'])
+def get_users():
+    users = User.query.order_by(User.username).all()
+    return jsonify([{
+        'id': user.id,
+        'username': user.username,
+        'created_at': user.created_at.isoformat()
+    } for user in users])
+
+@app.route('/users', methods=['POST'])
+def create_user():
+    data = request.json
+    username = data.get('username')
+    
+    if not username:
+        return jsonify({'error': 'Username is required'}), 400
+        
+    # Check if username already exists
+    if User.query.filter_by(username=username).first():
+        return jsonify({'error': 'Username already exists'}), 400
+    
+    new_user = User(username=username)
+    db.session.add(new_user)
+    db.session.commit()
+    
+    return jsonify({
+        'id': new_user.id,
+        'username': new_user.username,
+        'created_at': new_user.created_at.isoformat()
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000))) 
