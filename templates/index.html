@@ -72,6 +72,17 @@
                     <label for="weight" class="form-label">Weight (grams)</label>
                     <input type="number" class="form-control" id="weight" required>
                 </div>
+                <div class="mb-3">
+                    <label for="mealDetails" class="form-label">
+                        Additional Details (optional)
+                        <i class="text-muted" data-bs-toggle="tooltip" 
+                           title="Add any helpful details about the meal (e.g., 'Contains 3 eggs, whole wheat bread, and avocado' or 'Thai green curry with coconut milk')">
+                            <small>(?)</small>
+                        </i>
+                    </label>
+                    <textarea class="form-control" id="mealDetails" rows="2" 
+                              placeholder="E.g., '3 eggs with whole wheat bread' or 'Thai green curry with coconut milk'"></textarea>
+                </div>
                 <div id="previewContainer" class="mb-3" style="display: none;">
                     <img id="preview" class="preview-image">
                 </div>
@@ -171,7 +182,12 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
     <script>
+        // Register the plugin
+        Chart.register(ChartDataLabels);
+        
         // Camera handling
         const video = document.getElementById('videoElement');
         const canvas = document.getElementById('photoCanvas');
@@ -219,6 +235,7 @@
             
             const formData = new FormData();
             formData.append('weight', document.getElementById('weight').value);
+            formData.append('meal_details', document.getElementById('mealDetails').value);
             
             // Show loading state
             const submitButton = e.target.querySelector('button[type="submit"]');
@@ -308,7 +325,7 @@
                         submitButton.innerHTML = originalButtonText;
                         submitButton.disabled = false;
                     }
-                }, 'image/jpeg', 0.8); // Reduced quality to 0.8 to help with file size
+                }, 'image/jpeg', 0.8);
             } catch (error) {
                 console.error('Error:', error);
                 alert('Error processing image. Please try again.');
@@ -372,7 +389,28 @@
             if (todayMacrosChart) todayMacrosChart.destroy();
             if (macrosTimeChart) macrosTimeChart.destroy();
 
-            // Calculate daily totals
+            // Process dates for charts
+            const chartData = {
+                dates: historicalData.dates.map(date => new Date(date)),
+                calories: historicalData.dates.map((date, i) => ({
+                    x: new Date(date),
+                    y: historicalData.calories[i]
+                })),
+                protein: historicalData.dates.map((date, i) => ({
+                    x: new Date(date),
+                    y: historicalData.protein[i]
+                })),
+                carbs: historicalData.dates.map((date, i) => ({
+                    x: new Date(date),
+                    y: historicalData.carbs[i]
+                })),
+                fat: historicalData.dates.map((date, i) => ({
+                    x: new Date(date),
+                    y: historicalData.fat[i]
+                }))
+            };
+
+            // Calculate daily totals for today's macros chart
             let totalCalories = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0;
             meals.forEach(meal => {
                 totalCalories += meal.calories;
@@ -385,10 +423,9 @@
             caloriesChart = new Chart(ctx1, {
                 type: 'line',
                 data: {
-                    labels: historicalData.dates,
                     datasets: [{
                         label: 'Daily Calories',
-                        data: historicalData.calories,
+                        data: chartData.calories,
                         borderColor: 'rgb(255, 99, 132)',
                         tension: 0.1
                     }]
@@ -396,6 +433,18 @@
                 options: {
                     responsive: true,
                     scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'MMM d'
+                                }
+                            },
+                            ticks: {
+                                maxRotation: 45
+                            }
+                        },
                         y: {
                             beginAtZero: true,
                             title: {
@@ -413,7 +462,7 @@
                 data: {
                     labels: ['Protein', 'Carbs', 'Fat'],
                     datasets: [{
-                        data: [totalProtein * 4, totalCarbs * 4, totalFat * 9], // Convert to calories
+                        data: [totalProtein * 4, totalCarbs * 4, totalFat * 9],
                         backgroundColor: [
                             'rgba(54, 162, 235, 0.8)',
                             'rgba(255, 206, 86, 0.8)',
@@ -427,6 +476,29 @@
                         title: {
                             display: true,
                             text: 'Macro Distribution (in calories)'
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const value = context.raw;
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const percentage = ((value / total) * 100).toFixed(1);
+                                    const label = context.label;
+                                    const calories = value.toFixed(0);
+                                    return `${label}: ${calories} cal (${percentage}%)`;
+                                }
+                            }
+                        },
+                        datalabels: {
+                            formatter: (value, ctx) => {
+                                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                                const percentage = ((value / total) * 100).toFixed(1);
+                                return `${percentage}%`;
+                            },
+                            color: '#fff',
+                            font: {
+                                weight: 'bold'
+                            }
                         }
                     }
                 }
@@ -436,23 +508,22 @@
             macrosTimeChart = new Chart(ctx3, {
                 type: 'line',
                 data: {
-                    labels: historicalData.dates,
                     datasets: [
                         {
                             label: 'Protein (g)',
-                            data: historicalData.protein,
+                            data: chartData.protein,
                             borderColor: 'rgb(54, 162, 235)',
                             tension: 0.1
                         },
                         {
                             label: 'Carbs (g)',
-                            data: historicalData.carbs,
+                            data: chartData.carbs,
                             borderColor: 'rgb(255, 206, 86)',
                             tension: 0.1
                         },
                         {
                             label: 'Fat (g)',
-                            data: historicalData.fat,
+                            data: chartData.fat,
                             borderColor: 'rgb(75, 192, 192)',
                             tension: 0.1
                         }
@@ -461,6 +532,18 @@
                 options: {
                     responsive: true,
                     scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'MMM d'
+                                }
+                            },
+                            ticks: {
+                                maxRotation: 45
+                            }
+                        },
                         y: {
                             beginAtZero: true,
                             title: {
@@ -477,7 +560,8 @@
         function initializeDateRange() {
             const endDate = new Date();
             const startDate = new Date();
-            startDate.setMonth(startDate.getMonth() - 1); // Default to last 30 days
+            // Set to beginning of current week (Sunday)
+            startDate.setDate(startDate.getDate() - startDate.getDay());
             
             document.getElementById('startDate').valueAsDate = startDate;
             document.getElementById('endDate').valueAsDate = endDate;

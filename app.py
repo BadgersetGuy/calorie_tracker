@@ -44,7 +44,7 @@ class Meal(db.Model):
 with app.app_context():
     db.create_all()
 
-def analyze_image_with_openai(image_data, weight):
+def analyze_image_with_openai(image_data, weight, meal_details=None):
     try:
         if not os.getenv('OPENAI_API_KEY'):
             logger.error("OpenAI API key is not set")
@@ -52,6 +52,12 @@ def analyze_image_with_openai(image_data, weight):
         
         # Set API key directly
         openai.api_key = os.getenv('OPENAI_API_KEY')
+        
+        # Prepare the prompt based on whether meal details are provided
+        prompt_text = f"This is a meal weighing {weight}g (not including the plate)."
+        if meal_details:
+            prompt_text += f" Additional details provided: {meal_details}."
+        prompt_text += " Please identify the ingredients and estimate its nutritional content."
             
         logger.debug(f"Sending image to OpenAI (length: {len(image_data)})")
         response = openai.ChatCompletion.create(
@@ -62,7 +68,7 @@ def analyze_image_with_openai(image_data, weight):
                     "content": [
                         {
                             "type": "text",
-                            "text": f"Analyze this meal that weighs {weight}g. Identify the ingredients and estimate its nutritional content."
+                            "text": prompt_text
                         },
                         {
                             "type": "image_url",
@@ -106,7 +112,7 @@ def analyze_image_with_openai(image_data, weight):
                 }
             ],
             function_call={"name": "analyze_meal"},
-            max_tokens=5000
+            max_tokens=15000
         )
         logger.debug("Successfully received response from OpenAI")
         
@@ -133,6 +139,7 @@ def upload_meal():
         
         file = request.files['meal_photo']
         weight = float(request.form.get('weight', 0))
+        meal_details = request.form.get('meal_details', '').strip()
         
         if file.filename == '':
             logger.warning("Empty filename")
@@ -147,7 +154,11 @@ def upload_meal():
                 logger.debug(f"Encoded image to base64 (length: {len(image_data)})")
                 
                 # Analyze image with OpenAI
-                analysis_result = analyze_image_with_openai(image_data, weight)
+                analysis_result = analyze_image_with_openai(
+                    image_data, 
+                    weight,
+                    meal_details if meal_details else None
+                )
                 logger.debug("Successfully analyzed image")
                 
                 return jsonify({
