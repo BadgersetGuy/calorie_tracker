@@ -325,5 +325,8 @@ def create_user():
         'created_at': new_user.created_at.isoformat()
     })
 
+from mobile_api import register_mobile_api
+register_mobile_api(app, db, User, Meal)
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000))) 
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))

@@ -1,0 +1,10 @@
+.git
+.env
+.venv
+venv
+android
+instance
+*.db
+*.sqlite3
+__pycache__
+tests

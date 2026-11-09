@@ -1,0 +1,389 @@
+"""Additive Android API. Existing user/meal records are reused, never recreated."""
+import copy
+from datetime import datetime, timedelta, timezone
+import hmac
+import json
+import os
+import uuid
+
+from flask import Blueprint, jsonify, request
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
+
+import analysis_engine as engine
+
+
+def register_mobile_api(app, db, User, Meal):
+    class Draft(db.Model):
+        __tablename__ = "mobile_analysis_draft"
+        id = db.Column(db.String(36), primary_key=True)
+        user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+        revision = db.Column(db.Integer, nullable=False, default=1)
+        context = db.Column(db.Text, nullable=False)
+        photo = db.Column(db.Text)
+        result = db.Column(db.Text, nullable=False)
+        created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+        saved_meal_id = db.Column(db.Integer)
+
+    class Details(db.Model):
+        __tablename__ = "mobile_meal_details"
+        meal_id = db.Column(db.Integer, db.ForeignKey("meal.id"), primary_key=True)
+        analysis = db.Column(db.Text)
+        source_meal_id = db.Column(db.Integer)
+        source_draft_id = db.Column(db.String(36), unique=True)
+        request_key = db.Column(db.String(36), unique=True)
+        copy_signature = db.Column(db.String(64))
+
+    class Profile(db.Model):
+        __tablename__ = "mobile_profile"
+        user_id = db.Column(db.Integer, db.ForeignKey("user.id"), primary_key=True)
+        targets = db.Column(db.Text, nullable=False)
+
+    class CachedAnalysis(db.Model):
+        __tablename__ = "mobile_analysis_cache"
+        key = db.Column(db.String(64), primary_key=True)
+        result = db.Column(db.Text, nullable=False)
+
+    with app.app_context():
+        # Only create these additive tables. Do not alter live tables or overwrite old scores.
+        db.metadata.create_all(db.engine, tables=[Draft.__table__, Details.__table__, Profile.__table__, CachedAnalysis.__table__])
+
+    api = Blueprint("mobile", __name__, url_prefix="/api/v2")
+
+    @app.before_request
+    def mobile_auth():
+        # With a household token configured protect legacy endpoints too: otherwise they
+        # would bypass authentication and still expose the same meals.
+        if request.path in ("/health", "/"):
+            return None
+        token = os.getenv("MOBILE_API_TOKEN", "")
+        if not token:
+            if request.path.startswith("/api/v2"):
+                return jsonify(error="Android access is not configured on the server"), 503
+            return None
+        provided = request.headers.get("Authorization", "")
+        if not hmac.compare_digest(provided, "Bearer " + token):
+            return jsonify(error="Connect with your household access token"), 401
+
+    @app.get("/health")
+    def health():
+        return jsonify(status="ok", api_version=2)
+
+    @api.errorhandler(ValueError)
+    def bad_input(error):
+        db.session.rollback()
+        return jsonify(error=str(error)), 400
+
+    @api.errorhandler(IntegrityError)
+    def conflict(error):
+        db.session.rollback()
+        return jsonify(error="This change was already saved or conflicts with an existing record. Refresh and try again."), 409
+
+    def body():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ValueError("A JSON object is required")
+        return data
+
+    def user(value):
+        try:
+            found = db.session.get(User, int(value))
+        except (ValueError, TypeError):
+            found = None
+        if not found:
+            raise ValueError("Select an existing profile")
+        return found
+
+    def day(value):
+        try:
+            return datetime.strptime(value, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            raise ValueError("Date must be YYYY-MM-DD") from None
+
+    def meal_date(value):
+        # Android supplies an offset timestamp so history is correct in the user's timezone.
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError()
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("Meal time must include a timezone offset") from None
+
+    def text(value, maximum=8000):
+        if not isinstance(value, str) or len(value) > maximum:
+            raise ValueError("Text is too long or invalid")
+        return value.strip()
+
+    def serialize(meal):
+        detail = db.session.get(Details, meal.id)
+        return dict(id=meal.id, user_id=meal.user_id, date=meal.date.isoformat() + "Z",
+                    weight=meal.weight, description=meal.description or "Meal",
+                    calories=meal.calories, protein=meal.protein, carbs=meal.carbs,
+                    fat=meal.fat, image_data=meal.image_data,
+                    analysis=json.loads(detail.analysis) if detail and detail.analysis else None,
+                    source_meal_id=detail.source_meal_id if detail else None)
+
+    def meal_signature(record):
+        detail = db.session.get(Details, record.id)
+        # Snapshot used to detect edits from a second phone while a draft is open.
+        return engine.fingerprint(dict(id=record.id, weight=record.weight, description=record.description,
+            totals={n: getattr(record, n) for n in ("calories", "protein", "carbs", "fat")},
+            analysis=detail.analysis if detail else None), None)
+
+    def draft_data(draft):
+        return dict(id=draft.id, user_id=draft.user_id, revision=draft.revision,
+                    result=json.loads(draft.result), saved_meal_id=draft.saved_meal_id)
+
+    def get_draft(draft_id):
+        draft = db.session.get(Draft, draft_id)
+        if not draft:
+            raise ValueError("Analysis draft was not found")
+        return draft
+
+    def perform(context, photo):
+        key = engine.fingerprint(context, photo)
+        cached = db.session.get(CachedAnalysis, key)
+        if cached:
+            return json.loads(cached.result)
+        result = engine.analyze(context, photo)
+        # Cache only validated responses. Database conflict is safe to retry.
+        db.session.add(CachedAnalysis(key=key, result=json.dumps(result)))
+        return result
+
+    @api.get("/profiles")
+    def profiles():
+        return jsonify([dict(id=u.id, username=u.username,
+            targets=json.loads(p.targets) if (p := db.session.get(Profile, u.id)) else None)
+            for u in User.query.order_by(User.username).all()])
+
+    @api.post("/profiles")
+    def create_profile():
+        name = text(body().get("username", ""), 80)
+        if not name:
+            raise ValueError("Enter a profile name")
+        if User.query.filter_by(username=name).first():
+            raise ValueError("A profile already has that name")
+        record = User(username=name)
+        db.session.add(record)
+        db.session.commit()
+        return jsonify(id=record.id, username=record.username, targets=None), 201
+
+    @api.put("/profiles/<int:profile_id>/targets")
+    def targets(profile_id):
+        user(profile_id)
+        data = body()
+        result = {n: engine.positive(data.get(n), n, maximum=20000 if n == "calories" else 2000)
+                  for n in ("calories", "protein", "carbs", "fat")}
+        profile = db.session.get(Profile, profile_id) or Profile(user_id=profile_id)
+        profile.targets = json.dumps(result)
+        db.session.add(profile)
+        db.session.commit()
+        return jsonify(result)
+
+    @api.get("/meals")
+    def meals():
+        profile = user(request.args.get("user_id"))
+        date = day(request.args.get("date", datetime.utcnow().strftime("%Y-%m-%d")))
+        offset = int(request.args.get("offset_minutes", "0"))
+        if not -840 <= offset <= 840:
+            raise ValueError("Timezone offset is invalid")
+        start = date - timedelta(minutes=offset)
+        records = Meal.query.filter(Meal.user_id == profile.id, Meal.date >= start,
+                Meal.date < start + timedelta(days=1)).order_by(Meal.date.desc()).all()
+        return jsonify([serialize(record) for record in records])
+
+    @api.get("/history")
+    def history():
+        profile = user(request.args.get("user_id"))
+        query = text(request.args.get("query", ""), 120)
+        offset = int(request.args.get("offset", 0))
+        if not 0 <= offset <= 100000:
+            raise ValueError("History offset is invalid")
+        records = Meal.query.filter(Meal.user_id == profile.id)
+        if query:
+            records = records.filter(Meal.description.contains(query, autoescape=True))
+        total = records.count()
+        page = records.order_by(Meal.date.desc(), Meal.id.desc()).offset(offset).limit(30).all()
+        return jsonify(meals=[serialize(record) for record in page], total=total)
+
+    @api.get("/meals/<int:meal_id>")
+    def get_meal(meal_id):
+        record = db.session.get(Meal, meal_id)
+        if not record:
+            raise ValueError("Meal not found")
+        return jsonify(serialize(record))
+
+    @api.delete("/meals/<int:meal_id>")
+    def delete_meal(meal_id):
+        record = db.session.get(Meal, meal_id)
+        if not record:
+            raise ValueError("Meal not found")
+        Details.query.filter_by(meal_id=record.id).delete()
+        db.session.delete(record)
+        db.session.commit()
+        return jsonify(success=True)
+
+    @api.post("/analyses")
+    def new_analysis():
+        data = body()
+        profile = user(data.get("user_id"))
+        description = text(data.get("text", ""))
+        photo = engine.normalize_photo(data.get("image_data"))
+        previous = None
+        source_signature = None
+        if data.get("source_meal_id"):
+            source = db.session.get(Meal, int(data["source_meal_id"]))
+            if not source:
+                raise ValueError("Original meal not found")
+            detail = db.session.get(Details, source.id)
+            source_signature = meal_signature(source)
+            photo = photo or source.image_data
+            previous = json.loads(detail.analysis) if detail and detail.analysis else {
+                "description": source.description, "weight": source.weight,
+                "totals": {n: getattr(source, n) for n in ("calories", "protein", "carbs", "fat")}}
+        if not description and not photo:
+            raise ValueError("Take a photo or describe your meal")
+        weight = engine.positive(data["weight"], "Weight", False, 20000) if data.get("weight") else None
+        context = dict(text=description, weight=weight, previous=previous, conversation=[],
+            source_meal_id=data.get("source_meal_id"), source_signature=source_signature)
+        try:
+            result = perform(context, photo)
+        except RuntimeError as error:
+            return jsonify(error=str(error)), 502
+        draft = Draft(id=str(uuid.uuid4()), user_id=profile.id, context=json.dumps(context),
+                      photo=photo, result=json.dumps(result))
+        db.session.add(draft)
+        db.session.commit()
+        return jsonify(draft_data(draft)), 201
+
+    @api.get("/analyses/<draft_id>")
+    def read_analysis(draft_id):
+        return jsonify(draft_data(get_draft(draft_id)))
+
+    @api.post("/analyses/<draft_id>/clarifications")
+    def clarify(draft_id):
+        data = body()
+        draft = get_draft(draft_id)
+        revision = int(data.get("revision", 0))
+        if draft.saved_meal_id:
+            return jsonify(error="Meal is already saved; start a new analysis from History"), 409
+        if revision != draft.revision:
+            return jsonify(error="Analysis changed. Reload before clarifying."), 409
+        message = text(data.get("text", ""))
+        if not message:
+            raise ValueError("Enter a clarification")
+        context = json.loads(draft.context)
+        previous = json.loads(draft.result)
+        if len(context["conversation"]) >= 30:
+            raise ValueError("Please start a new analysis")
+        context["conversation"].append(dict(questions=previous.get("questions", []), answer=message))
+        context["previous"] = previous
+        if data.get("weight"):
+            context["weight"] = engine.positive(data["weight"], "Weight", False, 20000)
+        # Corrections in natural language supersede the original total; ask the model
+        # to resolve it rather than enforcing a stale number on a changed portion.
+        else:
+            context["previous_explicit_weight"] = context.get("weight")
+            context["weight"] = None
+        try:
+            result = perform(context, draft.photo)
+        except RuntimeError as error:
+            return jsonify(error=str(error)), 502
+        updated = db.session.execute(update(Draft).where(Draft.id == draft.id,
+            Draft.revision == revision, Draft.saved_meal_id.is_(None)).values(
+                context=json.dumps(context), result=json.dumps(result), revision=revision + 1))
+        if updated.rowcount != 1:
+            db.session.rollback()
+            return jsonify(error="Analysis changed while you were editing; reload it."), 409
+        db.session.commit()
+        db.session.expire_all()
+        return jsonify(draft_data(get_draft(draft_id)))
+
+    @api.post("/analyses/<draft_id>/save")
+    def save_analysis(draft_id):
+        data = body()
+        draft = get_draft(draft_id)
+        if draft.saved_meal_id:
+            saved_record = db.session.get(Meal, draft.saved_meal_id)
+            if not saved_record:
+                return jsonify(error="This saved meal has been deleted"), 410
+            return jsonify(serialize(saved_record))
+        if int(data.get("revision", 0)) != draft.revision:
+            return jsonify(error="Analysis changed. Review the current result before saving."), 409
+        result = json.loads(draft.result)
+        if result["status"] != "ready":
+            raise ValueError("Answer the clarification questions before saving")
+        replace_id = data.get("replace_meal_id")
+        if replace_id:
+            context = json.loads(draft.context)
+            record = db.session.get(Meal, int(replace_id))
+            if not record or record.user_id != draft.user_id or int(replace_id) != int(context.get("source_meal_id") or 0):
+                raise ValueError("This analysis cannot replace that meal")
+            if context.get("source_signature") != meal_signature(record):
+                return jsonify(error="This meal changed on another device. Start a fresh analysis from History."), 409
+        else:
+            record = Meal(user_id=draft.user_id, date=meal_date(data.get("date")))
+        record.description = result["description"]
+        record.weight = result["weight"]
+        record.image_data = draft.photo
+        for nutrient in ("calories", "protein", "carbs", "fat"):
+            setattr(record, nutrient, result["totals"][nutrient])
+        db.session.add(record)
+        db.session.flush()
+        claimed = db.session.execute(update(Draft).where(Draft.id == draft.id,
+            Draft.revision == int(data["revision"]), Draft.saved_meal_id.is_(None)).values(saved_meal_id=record.id))
+        if claimed.rowcount != 1:
+            db.session.rollback()
+            return jsonify(error="Already saved or changed; refresh the analysis."), 409
+        detail = db.session.get(Details, record.id) or Details(meal_id=record.id)
+        detail.analysis = json.dumps(result)
+        detail.source_draft_id = draft.id
+        db.session.add(detail)
+        db.session.commit()
+        return jsonify(serialize(record)), 201
+
+    @api.post("/meals/<int:meal_id>/copy")
+    def copy_meal(meal_id):
+        data = body()
+        original = db.session.get(Meal, meal_id)
+        if not original:
+            raise ValueError("Original meal not found")
+        target = user(data.get("user_id"))
+        stamp = meal_date(data.get("date"))
+        key = text(data.get("request_key", ""), 36)
+        try:
+            uuid.UUID(key)
+        except ValueError:
+            raise ValueError("A unique request key is required") from None
+        if ("weight" in data) == ("portion_percent" in data):
+            raise ValueError("Provide a weight OR a percentage")
+        if "weight" in data:
+            if not original.weight or original.weight <= 0:
+                raise ValueError("This meal has no known weight. Use a percentage instead.")
+            factor = engine.positive(data["weight"], "Weight", False, 20000) / original.weight
+        else:
+            factor = engine.positive(data["portion_percent"], "Portion percent", False, 1000) / 100
+        signature = engine.fingerprint(dict(source=meal_id, target=target.id, date=stamp.isoformat(), factor=factor), None)
+        existing = Details.query.filter_by(request_key=key).first()
+        if existing:
+            if existing.copy_signature != signature:
+                return jsonify(error="Request key already used for a different copy"), 409
+            return jsonify(serialize(db.session.get(Meal, existing.meal_id)))
+        detail = db.session.get(Details, original.id)
+        analysis = copy.deepcopy(json.loads(detail.analysis)) if detail and detail.analysis else None
+        if analysis:
+            for ingredient in analysis["ingredients"]:
+                ingredient["grams"] *= factor
+            analysis = engine.calculate(analysis)
+        record = Meal(user_id=target.id, date=stamp, description=original.description,
+            image_data=original.image_data, weight=original.weight * factor,
+            **{n: getattr(original, n) * factor for n in ("calories", "protein", "carbs", "fat")})
+        db.session.add(record)
+        db.session.flush()
+        db.session.add(Details(meal_id=record.id, analysis=json.dumps(analysis) if analysis else None,
+            source_meal_id=original.id, request_key=key, copy_signature=signature))
+        db.session.commit()
+        return jsonify(serialize(record)), 201
+
+    app.register_blueprint(api)

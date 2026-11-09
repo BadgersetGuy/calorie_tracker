@@ -1,66 +1,39 @@
-# Calorie Tracker App
+# Everyday Meals
 
-A mobile-first web application for tracking calories and macronutrients using AI-powered image recognition.
+A native Android meal diary with a Flask backend. Photograph a meal or describe it in
+text, answer focused clarification questions, review the estimate, and save. Correct an
+analysis with more detail. Reuse meals from history for yourself or another household
+profile with a percentage or gram adjustment.
 
-## Features
+The Kotlin / Jetpack Compose app lives in `android/`. The existing web interface remains
+in `templates/` for reference; it is not used by the Android app.
 
-- Take photos of meals using your mobile device's camera
-- AI-powered food recognition and nutritional analysis
-- Track weight of meals in grams
-- View daily macro and calorie totals
-- Historical data tracking with date selection
-- Responsive design optimized for mobile devices
-- Interactive charts for visualizing nutrition data
+## Start here
 
-## Setup
+- [Android build, connection, server configuration and rollout](docs/ANDROID.md)
+- [Score definition, evidence and limitations](docs/SCORING.md)
+- `.env.example` lists server settings without credentials.
 
-1. Clone this repository
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Create a `.env` file in the root directory and add your OpenAI API key:
-   ```
-   OPENAI_API_KEY=your_api_key_here
-   SECRET_KEY=your_flask_secret_key_here
-   ```
-5. Run the application:
-   ```bash
-   python app.py
-   ```
-6. Open your browser and navigate to `http://localhost:5000`
+The provided source is older than the live Fly app. Reconcile the deployed source and
+test on a database backup before deploying. No production data has been migrated.
 
-## Usage
+## Local backend
 
-1. Click "Start Camera" to activate your device's camera
-2. Take a photo of your meal
-3. Enter the weight of the meal in grams
-4. Click "Analyze Meal" to get AI-powered nutritional analysis
-5. Review the analysis and make any necessary adjustments
-6. Confirm to save the meal to your daily log
-7. View your daily totals in the table and chart below
-8. Use the date selector to view historical data
+```sh
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+# Configure a private .env from .env.example, including MOBILE_API_TOKEN.
+.venv/bin/gunicorn --bind 0.0.0.0:5000 --timeout 150 app:app
+```
 
-## Technical Details
+Use HTTPS when connecting Android. Never put the OpenAI key in the APK.
 
-- Built with Flask and SQLite
-- Uses OpenAI's GPT-4 Vision API for image analysis
-- Mobile-first responsive design with Bootstrap 5
-- Interactive charts using Chart.js
-- Camera access using WebRTC APIs
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+cd android
+./gradlew assembleDebug lintDebug
+```
 
-## Security Notes
-
-- Never commit your `.env` file or expose your API keys
-- The application uses secure HTTPS for API communication
-- Image data is processed locally before being sent to OpenAI
-- Database is secured using SQLite's built-in security features
-
-## Contributing
-
-Feel free to submit issues and enhancement requests! 
+The dietary-pattern score uses a fixed, versioned formula. It is an app heuristic, not a
+validated clinical psoriasis or inflammation score. Model-estimated nutrition and portions
+remain estimates; copy/portion calculations use deterministic arithmetic.
