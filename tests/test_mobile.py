@@ -58,6 +58,58 @@ class MobileTests(unittest.TestCase):
         with patch.dict(os.environ, {"MOBILE_API_TOKEN": ""}):
             self.assertEqual(self.client.get("/api/v2/profiles").status_code, 503)
 
+    def test_existing_user_targets_are_shared_with_android(self):
+        self.a.target_calories = 2400
+        self.a.target_protein = 150
+        db.session.commit()
+        profiles = self.client.get("/api/v2/profiles", headers=self.headers).json
+        profile = next(p for p in profiles if p["id"] == self.a.id)
+        self.assertEqual(profile["targets"]["calories"], 2400)
+        values = dict(calories=1800, protein=100, carbs=200, fat=60)
+        response = self.client.put(f"/api/v2/profiles/{self.a.id}/targets", json=values, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        legacy = self.client.get(f"/users/{self.a.id}/targets", headers=self.headers).json
+        self.assertEqual(legacy["target_calories"], 1800)
+        self.client.put(f"/users/{self.a.id}/targets", json={"target_calories": 2100}, headers=self.headers)
+        updated = self.client.get("/api/v2/profiles", headers=self.headers).json
+        self.assertEqual(next(p for p in updated if p["id"] == self.a.id)["targets"]["calories"], 2100)
+
+    def test_historical_score_survives_copy_and_reanalysis(self):
+        original = Meal(user_id=self.a.id, date=datetime(2025, 5, 6, 12), weight=200,
+            description="Old oats", calories=130, protein=5.5, carbs=17, fat=4.5,
+            psoriasis_score=8.2, image_data="original-photo")
+        db.session.add(original); db.session.commit()
+        copied = self.post(f"/meals/{original.id}/copy", dict(user_id=self.b.id, portion_percent=70,
+            date="2026-11-09T12:00:00Z", request_key=str(uuid.uuid4())))
+        self.assertEqual(copied.status_code, 201)
+        self.assertEqual(copied.json["legacy_psoriasis_score"], 8.2)
+        self.assertIsNone(copied.json["analysis"])
+        with patch("analysis_engine.analyze", return_value=result()):
+            draft = self.post("/analyses", dict(user_id=self.a.id, source_meal_id=original.id, text="Correct oats")).json
+        revised = self.save(draft, replace_meal_id=original.id)
+        self.assertEqual(revised.json["legacy_psoriasis_score"], 8.2)
+        self.assertEqual(revised.json["analysis"]["score"]["value"], 75)
+        self.assertEqual(revised.json["image_data"], "original-photo")
+        self.assertEqual(revised.json["date"], "2025-05-06T12:00:00Z")
+
+    def test_legacy_delete_removes_mobile_metadata(self):
+        saved = self.save(self.start()).json
+        response = self.client.delete(f"/delete_meal/{saved['id']}?user_id={self.a.id}", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.execute(db.text('SELECT COUNT(*) FROM mobile_meal_details')).scalar(), 0)
+
+    def test_http_errors_keep_their_status(self):
+        self.assertEqual(self.client.get("/not-a-route", headers=self.headers).status_code, 404)
+
+    def test_legacy_score_average_does_not_treat_unscored_meals_as_zero(self):
+        for score in (8.0, None):
+            db.session.add(Meal(user_id=self.a.id, date=datetime(2026, 11, 9, 12), weight=200,
+                description="Meal", calories=100, protein=5, carbs=15, fat=2, psoriasis_score=score))
+        db.session.commit()
+        response = self.client.get(f"/meal_history?user_id={self.a.id}&start=2026-11-09&end=2026-11-09", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["psoriasis_scores"], [8.0])
+
     def test_text_only_analysis_save_and_retry(self):
         draft = self.start()
         first = self.save(draft); second = self.save(draft)

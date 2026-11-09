@@ -40,7 +40,7 @@ Tokens are revocable by changing the server environment value.
 Run with a timeout that accommodates analysis:
 
 ```
-gunicorn --bind 0.0.0.0:5000 --workers 2 --timeout 150 app:app
+gunicorn --bind 0.0.0.0:8080 --workers 2 --timeout 150 app:app
 ```
 
 `GET /health` should return `{"api_version":2,"status":"ok"}`. New data endpoints are
@@ -48,31 +48,43 @@ under `/api/v2`. Android access fails closed until `MOBILE_API_TOKEN` is configu
 Once configured, the legacy data routes also require the same token. The old web UI
 does not supply that token and will no longer load household data.
 
-### Existing production data: reconcile before deployment
+### Existing production data
 
-The supplied repository at commit `7ea45b8` is **older than the public Fly application**:
-the public interface has psoriasis scores and user-target routes absent from this source.
-Do not deploy this checkout over production without locating those uncommitted/deployed
-changes and inspecting a backup of the real schema.
+The newer `app.py` and `index.html` supplied in chat have now been integrated. The
+backend retains the supplied `/data/meals.db` default, existing User target columns,
+nullable Meal `psoriasis_score`, legacy target/deletion/history routes, and current web
+template. Android reads and writes the same User target columns as the legacy API;
+there is no second source of target settings.
 
-This implementation creates four new `mobile_*` tables and reuses the existing `user`
-and `meal` tables. It does not issue `ALTER`, `DROP`, or data migrations on startup.
-That preserves old rows on the repository's schema, but is not proof of compatibility
-with unknown production columns, non-null constraints, timestamps, or extra functionality.
-The mobile targets table is separate; existing production target settings are not imported
-automatically. Existing production psoriasis scores remain in their original columns and
-are not reinterpreted as the new score.
+Three new `mobile_*` tables store analysis drafts, meal details, and cached analyses.
+Startup creates missing tables but does not alter existing columns or rewrite old rows.
+Historical 1–10 psoriasis scores remain in `meal.psoriasis_score`, are returned separately
+as `legacy_psoriasis_score`, and are copied unchanged with a meal. New 0–100 dietary-pattern
+scores live in versioned analysis metadata. Reanalysis preserves the historical number as
+an original record; it is not converted to, or mixed with, the new rubric.
+
+Compatibility tests construct databases independently from both the older repository
+schema and the supplied updated schema. They verify existing IDs, dates, photos, totals,
+targets and scores survive startup. They do not substitute for checking the real database.
 
 Before rollout:
 
-1. Obtain the deployed source and take a verified backup of the real database and volumes.
-2. Inspect its schema and port the new modules into that source. Reconcile any extra required
-   meal columns and import target settings into `mobile_profile` explicitly.
-3. Test against a restored database copy. Check user IDs, meal counts, dates, nutrition,
-   photos, and a legacy meal copy; inspect historical scores without overwriting them.
-4. Preserve the existing database URI and Fly persistent volume mount. The repository's
-   default relative SQLite file is not a substitute for the real production data location.
-5. Deploy the backend, configure secrets in hosting settings, then connect Android.
+1. Take a verified backup of the existing database and Fly persistent volume.
+2. Test this checkout against a restored copy using its existing DATABASE_URL. Preserve
+   the `/data` mount and database URI rather than creating a new empty database.
+3. If that database predates the supplied source's target/score columns, run the explicit
+   additive upgrade after backing it up:
+
+   ```
+   flask --app app upgrade-legacy-schema
+   ```
+
+   This only adds missing nullable target/score columns. It is safe to run again and does
+   not overwrite existing values. Databases already matching the supplied app need no
+   column changes. No legacy scores are recalculated automatically.
+4. Verify profiles, target values, meal counts/dates/photos, and copying an older meal.
+5. Deploy the backend with the existing Fly port configuration (the supplied app defaults
+   to port 8080), configure secrets, and connect both Android phones.
 
 No production database, deployment, or repository remote has been modified by this work.
 

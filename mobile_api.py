@@ -34,11 +34,6 @@ def register_mobile_api(app, db, User, Meal):
         request_key = db.Column(db.String(36), unique=True)
         copy_signature = db.Column(db.String(64))
 
-    class Profile(db.Model):
-        __tablename__ = "mobile_profile"
-        user_id = db.Column(db.Integer, db.ForeignKey("user.id"), primary_key=True)
-        targets = db.Column(db.Text, nullable=False)
-
     class CachedAnalysis(db.Model):
         __tablename__ = "mobile_analysis_cache"
         key = db.Column(db.String(64), primary_key=True)
@@ -46,7 +41,7 @@ def register_mobile_api(app, db, User, Meal):
 
     with app.app_context():
         # Only create these additive tables. Do not alter live tables or overwrite old scores.
-        db.metadata.create_all(db.engine, tables=[Draft.__table__, Details.__table__, Profile.__table__, CachedAnalysis.__table__])
+        db.metadata.create_all(db.engine, tables=[Draft.__table__, Details.__table__, CachedAnalysis.__table__])
 
     api = Blueprint("mobile", __name__, url_prefix="/api/v2")
 
@@ -121,6 +116,7 @@ def register_mobile_api(app, db, User, Meal):
                     weight=meal.weight, description=meal.description or "Meal",
                     calories=meal.calories, protein=meal.protein, carbs=meal.carbs,
                     fat=meal.fat, image_data=meal.image_data,
+                    legacy_psoriasis_score=meal.psoriasis_score,
                     analysis=json.loads(detail.analysis) if detail and detail.analysis else None,
                     source_meal_id=detail.source_meal_id if detail else None)
 
@@ -128,6 +124,7 @@ def register_mobile_api(app, db, User, Meal):
         detail = db.session.get(Details, record.id)
         # Snapshot used to detect edits from a second phone while a draft is open.
         return engine.fingerprint(dict(id=record.id, weight=record.weight, description=record.description,
+            legacy_psoriasis_score=record.psoriasis_score,
             totals={n: getattr(record, n) for n in ("calories", "protein", "carbs", "fat")},
             analysis=detail.analysis if detail else None), None)
 
@@ -154,7 +151,8 @@ def register_mobile_api(app, db, User, Meal):
     @api.get("/profiles")
     def profiles():
         return jsonify([dict(id=u.id, username=u.username,
-            targets=json.loads(p.targets) if (p := db.session.get(Profile, u.id)) else None)
+            targets={n: getattr(u, "target_" + n) for n in ("calories", "protein", "carbs", "fat")}
+                if any(getattr(u, "target_" + n) is not None for n in ("calories", "protein", "carbs", "fat")) else None)
             for u in User.query.order_by(User.username).all()])
 
     @api.post("/profiles")
@@ -171,13 +169,12 @@ def register_mobile_api(app, db, User, Meal):
 
     @api.put("/profiles/<int:profile_id>/targets")
     def targets(profile_id):
-        user(profile_id)
+        profile = user(profile_id)
         data = body()
         result = {n: engine.positive(data.get(n), n, maximum=20000 if n == "calories" else 2000)
                   for n in ("calories", "protein", "carbs", "fat")}
-        profile = db.session.get(Profile, profile_id) or Profile(user_id=profile_id)
-        profile.targets = json.dumps(result)
-        db.session.add(profile)
+        for nutrient, value in result.items():
+            setattr(profile, "target_" + nutrient, value)
         db.session.commit()
         return jsonify(result)
 
@@ -377,6 +374,7 @@ def register_mobile_api(app, db, User, Meal):
                 ingredient["grams"] *= factor
             analysis = engine.calculate(analysis)
         record = Meal(user_id=target.id, date=stamp, description=original.description,
+            psoriasis_score=original.psoriasis_score,
             image_data=original.image_data, weight=original.weight * factor,
             **{n: getattr(original, n) * factor for n in ("calories", "protein", "carbs", "fat")})
         db.session.add(record)
@@ -387,3 +385,4 @@ def register_mobile_api(app, db, User, Meal):
         return jsonify(serialize(record)), 201
 
     app.register_blueprint(api)
+    return Details

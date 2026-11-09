@@ -192,6 +192,9 @@ fun MealList(vm: MealViewModel, onTargets: () -> Unit) {
                         }
                     }
                     meal.optJSONObject("analysis")?.optJSONObject("score")?.let { score -> Text("Dietary pattern  ${score.getInt("value")}/100", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary) }
+                    if (meal.optJSONObject("analysis") == null && meal.has("legacy_psoriasis_score") && !meal.isNull("legacy_psoriasis_score")) {
+                        Text("Historical score ${meal.optDouble("legacy_psoriasis_score")}/10", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Row {
                         TextButton(onClick = { vm.openCopy(meal) }, enabled = !vm.busy) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("Log again / copy") }
                         Spacer(Modifier.weight(1f))
@@ -393,6 +396,9 @@ fun MealDialog(vm: MealViewModel, meal: JSONObject) {
                     Text(meal.getString("description")); Text("${meal.number("calories")} kcal · ${meal.number("weight")} g"); MacroRow(meal)
                     Text("This older meal has saved nutrition totals. Reanalyse it to add ingredient details and the new dietary score.")
                 }
+            }
+            if (meal.has("legacy_psoriasis_score") && !meal.isNull("legacy_psoriasis_score")) item {
+                Text("Historical psoriasis score: ${meal.optDouble("legacy_psoriasis_score")}/10. Preserved from the original analysis; its old prompt-based scale is separate from the new dietary-pattern rubric.", style = MaterialTheme.typography.bodySmall)
             }
             item { OutlinedButton(onClick = { vm.reanalyze(meal) }, enabled = !vm.busy) { Text("Correct / reanalyse meal") } }
             item { TextButton(onClick = { delete = true }, enabled = !vm.busy) { Text("Delete meal", color = MaterialTheme.colorScheme.error) } }

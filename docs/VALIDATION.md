@@ -2,7 +2,7 @@
 
 9 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 19 tests passed, temporary SQLite database.
+- `python -m unittest discover -s tests -q`: 26 tests passed, temporary SQLite database.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
@@ -20,5 +20,8 @@ usability on hardware, live OpenAI calls, comparative food recognition accuracy,
 Fly database compatibility, deployment, or a GitHub PR. No production records were
 read or changed. The public page and its frontend code were inspected.
 
-The repository source lacks scoring/target features present on the live Fly app. The
-deployed source and a restored production database copy must be reconciled before rollout.
+The newer app.py and index.html supplied by the user are integrated. Additional tests
+verify existing target interoperability, unchanged historical scores when copying or
+reanalysing, legacy deletion metadata cleanup, and startup against independently built
+old/new schemas. The explicit older-schema upgrade adds nullable columns idempotently.
+A restored copy of the actual Fly database has not been tested.

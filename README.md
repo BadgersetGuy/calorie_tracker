@@ -14,8 +14,9 @@ in `templates/` for reference; it is not used by the Android app.
 - [Score definition, evidence and limitations](docs/SCORING.md)
 - `.env.example` lists server settings without credentials.
 
-The provided source is older than the live Fly app. Reconcile the deployed source and
-test on a database backup before deploying. No production data has been migrated.
+The latest backend and template supplied in chat are integrated. Existing targets and
+historical scores are preserved. Test against a restored production database before
+deploying; no production data has been migrated.
 
 ## Local backend
 
@@ -23,7 +24,7 @@ test on a database backup before deploying. No production data has been migrated
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 # Configure a private .env from .env.example, including MOBILE_API_TOKEN.
-.venv/bin/gunicorn --bind 0.0.0.0:5000 --timeout 150 app:app
+.venv/bin/gunicorn --bind 0.0.0.0:8080 --timeout 150 app:app
 ```
 
 Use HTTPS when connecting Android. Never put the OpenAI key in the APK.
