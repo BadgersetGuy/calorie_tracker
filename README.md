@@ -13,6 +13,7 @@ in `templates/` for reference; it is not used by the Android app.
 
 - [Android build, connection, server configuration and rollout](docs/ANDROID.md)
 - [Score definition, evidence and limitations](docs/SCORING.md)
+- [Chat API, GPT Actions and skill setup](docs/CHAT_API.md)
 - `.env.example` lists server settings without credentials.
 
 The latest backend and template supplied in chat are integrated. Existing targets and
@@ -23,7 +24,7 @@ deploying; no production data has been migrated.
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-dev.txt
 # Configure a private .env from .env.example, including MOBILE_API_TOKEN.
 .venv/bin/gunicorn --bind 0.0.0.0:8080 --timeout 150 app:app
 ```

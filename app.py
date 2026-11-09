@@ -409,6 +409,7 @@ def delete_meal(meal_id):
         if not user_id or meal.user_id != int(user_id):
             return jsonify({'error': 'Unauthorized'}), 403
 
+        app.extensions['archive_meal'](meal)
         MobileMealDetails.query.filter_by(meal_id=meal.id).delete()
         app.extensions['mobile_timing_model'].query.filter_by(meal_id=meal.id).delete()
         db.session.delete(meal)

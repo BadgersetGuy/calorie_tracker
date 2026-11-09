@@ -152,3 +152,12 @@ class FeatureAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         rows = db.session.execute(db.text('SELECT user_id FROM mobile_suggestion_feedback')).all()
         self.assertEqual([row[0] for row in rows], [self.b.id])
+
+    def test_new_meals_mark_suggestions_for_refresh(self):
+        self.ideas()
+        before = self.client.get(f"/api/v2/suggestions?user_id={self.a.id}", headers=self.headers).json
+        self.assertFalse(before["needs_refresh"])
+        db.session.add(Meal(user_id=self.a.id, description="New meal", weight=200, calories=100, protein=3, carbs=12, fat=4))
+        db.session.commit()
+        after = self.client.get(f"/api/v2/suggestions?user_id={self.a.id}", headers=self.headers).json
+        self.assertTrue(after["needs_refresh"])

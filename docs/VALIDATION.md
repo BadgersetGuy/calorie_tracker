@@ -2,7 +2,7 @@
 
 9 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 42 tests passed, temporary SQLite database.
+- `python -m unittest discover -s tests -q`: 57 tests passed, temporary SQLite database.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
@@ -25,3 +25,9 @@ verify existing target interoperability, unchanged historical scores when copyin
 reanalysing, legacy deletion metadata cleanup, and startup against independently built
 old/new schemas. The explicit older-schema upgrade adds nullable columns idempotently.
 A restored copy of the actual Fly database has not been tested.
+
+Additional checks cover direct chat-analysis import, deterministic score recalculation,
+manual nutrition, multipart/photo references, attachment restrictions, authentication,
+revision conflicts, body-weight CRUD, daily summary coverage and profile isolation.
+The generated OpenAPI contract validates and covers every mobile API operation.
+No live Custom GPT or MCP handoff has been run; the Codex skill is prepared, not installed.

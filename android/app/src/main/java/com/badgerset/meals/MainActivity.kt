@@ -64,6 +64,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
     var showProfiles by remember { mutableStateOf(false) }
     var showTargets by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showWeights by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             if (vm.connected) TopAppBar(title = { Text("Everyday Meals", fontWeight = FontWeight.SemiBold) }, actions = {
@@ -71,6 +72,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
                     Icon(Icons.Outlined.PersonOutline, null); Spacer(Modifier.width(4.dp))
                     Text(vm.currentProfile?.optString("username") ?: "Profiles")
                 }
+                IconButton(onClick = { showWeights = true; vm.refreshWeights() }, enabled = !vm.busy) { Icon(Icons.Outlined.MonitorWeight, "Body weight history") }
                 IconButton(onClick = { showSettings = true }, enabled = !vm.busy) { Icon(Icons.Outlined.Settings, "Settings") }
             })
         },
@@ -106,6 +108,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
     }
     if (showProfiles) ProfileDialog(vm) { showProfiles = false }
     if (showTargets) TargetsDialog(vm) { showTargets = false }
+    if (showWeights) BodyWeightsDialog(vm) { showWeights = false }
     if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Connection") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(vm.server)
@@ -178,7 +181,7 @@ fun MealList(vm: MealViewModel, onTargets: () -> Unit) {
                     }
                     MacroRow(totals)
                     val timings = vm.meals.mapNotNull { it.optJSONObject("discipline") }
-                    if (timings.isNotEmpty()) Text("Discipline average: ${"%.1f".format(timings.map { it.getDouble("value") }.average())}/10 · 18:00 cutoff${if (timings.any { it.optBoolean("inferred") }) " · includes inferred times" else ""}", style = MaterialTheme.typography.bodySmall)
+                    if (timings.isNotEmpty()) Text("Discipline for day: ${timings.minOf { it.getInt("value") }}/10 · 18:00 cutoff${if (timings.any { it.optBoolean("inferred") }) " · includes inferred times" else ""}", style = MaterialTheme.typography.bodySmall)
                     if (!history) TextButton(onClick = onTargets, enabled = !vm.busy) { Text("Edit daily targets") }
                 }
             }
@@ -501,4 +504,29 @@ fun MealIdeas(vm: MealViewModel) {
         item { LinkText("Research behind the dietary pattern", "https://jamanetwork.com/journals/jamadermatology/fullarticle/2839013") }
         item { TextButton(onClick = vm::clearIdeaFeedback, enabled = !vm.busy) { Text("Reset likes and skips") } }
     }
+}
+
+@Composable
+fun BodyWeightsDialog(vm: MealViewModel, close: () -> Unit) {
+    var kg by rememberSaveable { mutableStateOf("") }
+    var selected by remember { mutableStateOf<JSONObject?>(null) }
+    AlertDialog(onDismissRequest = close, title = { Text("Body weight · ${vm.currentProfile?.optString("username") ?: "profile"}") }, text = {
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            vm.error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+            item { OutlinedTextField(kg, { kg = it }, label = { Text("Body weight (kg)") }, singleLine = true, enabled = !vm.busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)) }
+            item { Button(onClick = { vm.saveBodyWeight(kg, selected); kg = ""; selected = null }, enabled = !vm.busy && (kg.toDoubleOrNull() ?: 0.0) > 0) { Text(if (selected == null) "Log weight now" else "Save correction") } }
+            if (selected != null) item { TextButton(onClick = { selected = null; kg = "" }) { Text("Cancel correction") } }
+            items(vm.weightRecords, key = { it.getString("id") }) { record ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).clickable(enabled = !vm.busy) { selected = record; kg = record.getDouble("weight_kg").toString() }) {
+                        Text("${record.getDouble("weight_kg")} kg", fontWeight = FontWeight.SemiBold)
+                        Text(OffsetDateTime.parse(record.getString("recorded_at")).atZoneSameInstant(java.time.ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM yyyy · HH:mm")), style = MaterialTheme.typography.bodySmall)
+                        Text("Tap to correct", style = MaterialTheme.typography.labelSmall)
+                    }
+                    IconButton(onClick = { vm.deleteBodyWeight(record) }, enabled = !vm.busy) { Icon(Icons.Outlined.DeleteOutline, "Delete body weight entry") }
+                }
+            }
+            if (vm.weightRecords.isEmpty() && !vm.busy) item { Text("No body weight logged yet. Meal portions are stored separately.") }
+        }
+    }, confirmButton = { TextButton(onClick = close, enabled = !vm.busy) { Text("Done") } })
 }

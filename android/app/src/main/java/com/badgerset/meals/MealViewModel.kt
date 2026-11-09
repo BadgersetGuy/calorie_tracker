@@ -70,6 +70,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     var historySearch by mutableStateOf("")
     var historyTotal by mutableIntStateOf(0)
     var ideas by mutableStateOf<JSONObject?>(null)
+    var weightRecords by mutableStateOf(emptyList<JSONObject>())
     var avoidIngredients by mutableStateOf("")
     private var ideaRequestKey = UUID.randomUUID().toString()
     private var ideaRequestContext = ""
@@ -106,6 +107,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
             connection.readTimeout = 120000
             connection.setRequestProperty("Authorization", "Bearer " + token.trim())
             connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("X-Meal-Client", "android")
             if (data != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
@@ -169,12 +171,13 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     } }
     fun selectProfile(id: Int) {
         if (busy || draft != null || editSource != 0) { error = "Save or discard your current analysis before switching profiles."; return }
-        profileId = id; ideas = null; prefs.edit().putInt("profile", id).apply(); refresh()
+        profileId = id; ideas = null; meals = emptyList(); weightRecords = emptyList()
+        prefs.edit().putInt("profile", id).apply(); refresh()
     }
     fun createProfile(name: String) = work {
         require(draft == null && editSource == 0) { "Save or discard the current analysis before creating a profile." }
         val record = JSONObject(api("/profiles", "POST", JSONObject().put("username", name)))
-        profiles = profiles + record; profileId = record.getInt("id"); loadMeals()
+        profiles = profiles + record; profileId = record.getInt("id"); meals = emptyList(); weightRecords = emptyList(); ideas = null; loadMeals()
     }
     fun setHistory(date: LocalDate) { if (!busy) { historyAll = false; historyDate = date; refresh() } }
     fun showAllHistory() { if (!busy) { historyAll = true; refresh() } }
@@ -187,6 +190,25 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     fun saveTargets(values: JSONObject) = work {
         api("/profiles/$profileId/targets", "PUT", values)
         profiles = JSONArray(api("/profiles")).objects(); notice = "Daily targets saved"
+    }
+    fun refreshWeights() = work { weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects() }
+    fun saveBodyWeight(kg: String, existing: JSONObject?) = work {
+        val value = kg.toDoubleOrNull()
+        require(value != null && value > 0 && value <= 700) { "Enter body weight in kilograms" }
+        val data = JSONObject().put("weight_kg", value).put("notes", existing?.optString("notes") ?: "")
+            .put("recorded_at", existing?.getString("recorded_at") ?: OffsetDateTime.now().toString())
+        if (existing == null) {
+            data.put("user_id", profileId).put("request_key", UUID.randomUUID().toString())
+            api("/weights", "POST", data)
+        } else {
+            data.put("revision", existing.getInt("revision")); api("/weights/${existing.getString("id")}", "PUT", data)
+        }
+        weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects()
+        notice = "Body weight saved"
+    }
+    fun deleteBodyWeight(existing: JSONObject) = work {
+        api("/weights/${existing.getString("id")}", "DELETE", JSONObject().put("revision", existing.getInt("revision")))
+        weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects()
     }
     fun changePhoto(uri: Uri?) { if (!busy) { photoUri = uri; persistEntry() } }
 
@@ -295,8 +317,8 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun loadIdeas() {
         avoidIngredients = prefs.getString("avoid-$profileId", "")!!
         ideas = JSONObject(api("/suggestions?user_id=$profileId"))
-        if (!ideas!!.has("id")) generateIdeas()
-        else avoidIngredients = ideas!!.optJSONArray("avoid")?.strings()?.joinToString(", ") ?: ""
+        if (ideas!!.has("id")) avoidIngredients = ideas!!.optJSONArray("avoid")?.strings()?.joinToString(", ") ?: ""
+        if (!ideas!!.has("id") || ideas!!.optBoolean("needs_refresh")) generateIdeas()
     }
     private suspend fun generateIdeas() {
         val requestContext = "$profileId:$avoidIngredients"
@@ -325,7 +347,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun disconnect() {
         if (busy) return
-        connected = false; token = ""; profiles = emptyList(); meals = emptyList(); mealDetail = null; ideas = null
+        connected = false; token = ""; profiles = emptyList(); meals = emptyList(); weightRecords = emptyList(); mealDetail = null; ideas = null
         resetEntry(); prefs.edit().remove("token").remove("profile").apply()
     }
 }

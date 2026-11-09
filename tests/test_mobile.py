@@ -32,7 +32,7 @@ class MobileTests(unittest.TestCase):
         self.a = User(username="Me"); self.b = User(username="Wife")
         db.session.add_all([self.a, self.b]); db.session.commit()
         self.client = app.test_client()
-        self.headers = {"Authorization": "Bearer test-household"}
+        self.headers = {"Authorization": "Bearer test-household", "X-Meal-Client": "android"}
 
     def tearDown(self):
         db.session.remove(); self.ctx.pop()

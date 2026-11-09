@@ -1,0 +1,2066 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Everyday Meals household API",
+    "version": "2.1.0",
+    "description": "Shared API for Android, private GPT Actions and REST-based skills. Household bearer access covers both profiles."
+  },
+  "servers": [
+    {
+      "url": "https://calorie-tracker-billowing-rain-2129.fly.dev"
+    }
+  ],
+  "security": [
+    {
+      "householdBearer": []
+    }
+  ],
+  "paths": {
+    "/api/v2/profiles": {
+      "get": {
+        "operationId": "mobile_profiles",
+        "summary": "Profiles",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        }
+      },
+      "post": {
+        "operationId": "mobile_create_profile",
+        "summary": "Create profile",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/profiles/{profile_id}/targets": {
+      "put": {
+        "operationId": "mobile_targets",
+        "summary": "Targets",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "calories": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "protein": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "carbs": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "fat": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "calories",
+                  "protein",
+                  "carbs",
+                  "fat"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/meals": {
+      "get": {
+        "operationId": "mobile_meals",
+        "summary": "Meals",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset_minutes",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ]
+      },
+      "post": {
+        "operationId": "mobile_import_meal",
+        "summary": "Import meal",
+        "description": "Log a meal with an analysis already produced in chat, or explicit manual nutrition totals. Provide structured analysis OR description/totals, and one photo source if available. The server recomputes scores and ingredient totals; it does not call another model. Reuse a request_key only to retry the same submission.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "parameters": [
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  },
+                  "request_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "weight": {
+                    "type": "number"
+                  },
+                  "totals": {
+                    "type": "object",
+                    "properties": {
+                      "calories": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "protein": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "carbs": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "fat": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "calories",
+                      "protein",
+                      "carbs",
+                      "fat"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "analysis": {
+                    "$ref": "#/components/schemas/MealAnalysis"
+                  },
+                  "eaten_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA eating timezone, e.g. Europe/Bucharest"
+                  },
+                  "image_data": {
+                    "type": "string",
+                    "format": "byte",
+                    "description": "Actual base64 photo bytes, only from a file-capable client; never fabricate them."
+                  },
+                  "openaiFileIdRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1,
+                    "description": "Exactly one meal photo uploaded in this conversation. GPT Actions replace its file ID with attachment metadata including a short-lived download_link."
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "request_key",
+                  "eaten_at",
+                  "timezone"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "type": "string",
+                    "description": "JSON-encoded request body"
+                  },
+                  "meal_photo": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "payload",
+                  "meal_photo"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/history": {
+      "get": {
+        "operationId": "mobile_history",
+        "summary": "History",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ]
+      }
+    },
+    "/api/v2/meals/{meal_id}": {
+      "get": {
+        "operationId": "mobile_get_meal",
+        "summary": "Get meal",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "meal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "mobile_delete_meal",
+        "summary": "Delete meal",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "meal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "mobile_edit_meal",
+        "summary": "Edit meal",
+        "description": "Edit a meal using its current revision. Supply a complete replacement analysis OR description, weight and totals. A manual replacement clears the previous dietary score; historical 1\u201310 scores remain separate. Optional eating time/photo replace those values.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "meal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  },
+                  "request_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "weight": {
+                    "type": "number"
+                  },
+                  "totals": {
+                    "type": "object",
+                    "properties": {
+                      "calories": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "protein": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "carbs": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "fat": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "calories",
+                      "protein",
+                      "carbs",
+                      "fat"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "analysis": {
+                    "$ref": "#/components/schemas/MealAnalysis"
+                  },
+                  "eaten_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA eating timezone, e.g. Europe/Bucharest"
+                  },
+                  "image_data": {
+                    "type": "string",
+                    "format": "byte",
+                    "description": "Actual base64 photo bytes, only from a file-capable client; never fabricate them."
+                  },
+                  "openaiFileIdRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1,
+                    "description": "Exactly one meal photo uploaded in this conversation. GPT Actions replace its file ID with attachment metadata including a short-lived download_link."
+                  },
+                  "revision": {
+                    "type": "string",
+                    "description": "Revision returned by the latest meal retrieval"
+                  }
+                },
+                "required": [
+                  "revision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/analyses": {
+      "post": {
+        "operationId": "mobile_new_analysis",
+        "summary": "New analysis",
+        "description": "Start server-side photo/text analysis. This can make a paid model request. Returns a persisted draft with status ready or clarify. Never claim a meal is saved until save succeeds.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "weight": {
+                    "type": "number"
+                  },
+                  "source_meal_id": {
+                    "type": "integer"
+                  },
+                  "image_data": {
+                    "type": "string",
+                    "format": "byte",
+                    "description": "Actual base64 photo bytes, only from a file-capable client; never fabricate them."
+                  },
+                  "openaiFileIdRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1,
+                    "description": "Exactly one meal photo uploaded in this conversation. GPT Actions replace its file ID with attachment metadata including a short-lived download_link."
+                  }
+                },
+                "required": [
+                  "user_id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "type": "string",
+                    "description": "JSON-encoded request body"
+                  },
+                  "meal_photo": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "payload",
+                  "meal_photo"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "mobile_list_analyses",
+        "summary": "List analyses",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/analyses/{draft_id}": {
+      "get": {
+        "operationId": "mobile_read_analysis",
+        "summary": "Read analysis",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_context",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/analyses/{draft_id}/photo": {
+      "get": {
+        "operationId": "mobile_draft_photo",
+        "summary": "Draft photo",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Stored JPEG",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/analyses/{draft_id}/clarifications": {
+      "post": {
+        "operationId": "mobile_clarify",
+        "summary": "Clarify",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "revision": {
+                    "type": "integer"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "weight": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/analyses/{draft_id}/save": {
+      "post": {
+        "operationId": "mobile_save_analysis",
+        "summary": "Save analysis",
+        "description": "Save a reviewed ready draft. replace_meal_id updates that original meal only when the draft was created from it; otherwise creates a meal. Repeating a successful save returns the saved meal.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "revision": {
+                    "type": "integer"
+                  },
+                  "replace_meal_id": {
+                    "type": "integer"
+                  },
+                  "eaten_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA eating timezone, e.g. Europe/Bucharest"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "eaten_at",
+                  "timezone"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/meals/{meal_id}/copy": {
+      "post": {
+        "operationId": "mobile_copy_meal",
+        "summary": "Copy meal",
+        "description": "Reuse a past meal for either profile. Supply portion_percent OR weight in grams. Nutrition scales arithmetically, dietary composition score stays fixed, discipline uses the new eating time.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "parameters": [
+          {
+            "name": "meal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  },
+                  "request_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "portion_percent": {
+                    "type": "number"
+                  },
+                  "weight": {
+                    "type": "number"
+                  },
+                  "eaten_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA eating timezone, e.g. Europe/Bucharest"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "request_key",
+                  "eaten_at",
+                  "timezone"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/suggestions": {
+      "get": {
+        "operationId": "mobile_latest_suggestions",
+        "summary": "Latest suggestions",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "mobile_new_suggestions",
+        "summary": "New suggestions",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  },
+                  "request_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "avoid": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "request_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/suggestions/{recipe_id}/feedback": {
+      "put": {
+        "operationId": "mobile_suggestion_feedback",
+        "summary": "Suggestion feedback",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "recipe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "like",
+                      "skip",
+                      "clear"
+                    ]
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "action"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/suggestions/feedback": {
+      "delete": {
+        "operationId": "mobile_clear_suggestion_feedback",
+        "summary": "Clear suggestion feedback",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "user_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/meals/{meal_id}/photo": {
+      "get": {
+        "operationId": "mobile_meal_photo",
+        "summary": "Meal photo",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Stored JPEG",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "meal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/profiles/{profile_id}": {
+      "patch": {
+        "operationId": "mobile_rename_profile",
+        "summary": "Rename profile",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/weights": {
+      "get": {
+        "operationId": "mobile_weights",
+        "summary": "Weights",
+        "description": "Read body weight in kg; distinguishes it from meal portion weight. Paginated, optionally date-filtered.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "timezone",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "mobile_create_weight",
+        "summary": "Create weight",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          },
+          "201": {
+            "description": "Created successfully"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "integer"
+                  },
+                  "request_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "weight_kg": {
+                    "type": "number"
+                  },
+                  "recorded_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "request_key",
+                  "weight_kg",
+                  "recorded_at"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/weights/{entry_id}": {
+      "put": {
+        "operationId": "mobile_edit_weight",
+        "summary": "Edit weight",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "revision": {
+                    "type": "integer"
+                  },
+                  "weight_kg": {
+                    "type": "number"
+                  },
+                  "recorded_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "weight_kg",
+                  "recorded_at"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "mobile_get_weight",
+        "summary": "Get weight",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "mobile_delete_weight",
+        "summary": "Delete weight",
+        "description": "Authenticated household meal diary operation.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "revision": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "revision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/summaries": {
+      "get": {
+        "operationId": "mobile_summaries",
+        "summary": "Summaries",
+        "description": "Daily or ranged calories, protein/carbs/fat, meal timestamps, personal discipline scores, dietary-pattern score coverage, historical psoriasis scores, and logged body weights. No meals means zero logged intake, not proof of fasting. Dietary scores are app heuristics, not clinical inflammation measurements.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "timezone",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_meals",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+          }
+        ]
+      }
+    },
+    "/api/v2/logs": {
+      "get": {
+        "operationId": "mobile_logs",
+        "summary": "Logs",
+        "description": "Paginated creation/update/deletion records since the upgraded backend was installed. Older meal history remains available separately.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "householdBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "MealAnalysis": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "clarify",
+              "ready"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assumptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "grams": {
+                  "type": "number"
+                },
+                "group": {
+                  "type": "string",
+                  "enum": [
+                    "vegetables",
+                    "fruit",
+                    "legumes",
+                    "whole_grains",
+                    "nuts_seeds",
+                    "olive_oil",
+                    "fish",
+                    "processed_meat",
+                    "red_meat",
+                    "sweets",
+                    "refined_grains",
+                    "alcohol",
+                    "neutral"
+                  ]
+                },
+                "per_100g": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "calories": {
+                      "type": "number"
+                    },
+                    "protein": {
+                      "type": "number"
+                    },
+                    "carbs": {
+                      "type": "number"
+                    },
+                    "fat": {
+                      "type": "number"
+                    },
+                    "fiber": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "calories",
+                    "protein",
+                    "carbs",
+                    "fat",
+                    "fiber"
+                  ]
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "gluten",
+                      "dairy",
+                      "eggs",
+                      "nightshades"
+                    ]
+                  }
+                },
+                "source_note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "grams",
+                "group",
+                "per_100g",
+                "tags",
+                "source_note"
+              ]
+            }
+          }
+        },
+        "required": [
+          "status",
+          "description",
+          "questions",
+          "assumptions",
+          "confidence",
+          "ingredients"
+        ]
+      }
+    }
+  }
+}

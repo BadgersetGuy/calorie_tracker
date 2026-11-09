@@ -109,6 +109,7 @@ requires listing/privacy work and a signed App Bundle; neither is claimed here.
 ## Testing
 
 ```
+pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 cd android
 ./gradlew assembleDebug lintDebug
@@ -154,8 +155,8 @@ original local timestamp, timezone and version, independently of analysis time.
 Reanalysis preserves the original timezone even if the phone has travelled. Meal
 copies use the new eating time. For old records with no confirmed local time, the
 app marks the score as inferred, using HOUSEHOLD_TIMEZONE (default Europe/Bucharest).
-Daily discipline is the arithmetic mean of logged meal scores; an empty day has no
-score. It is never combined with the food composition score.
+Daily discipline is the lowest logged meal score, so early meals do not dilute a
+late meal penalty; an empty day has no score. It is never combined with the food composition score.
 
 Ideas use an initial catalog of 18 Mediterranean-style dishes and ingredient lists.
 Ranking reads up to 120 recent meals for that profile, including legacy descriptions
@@ -171,3 +172,7 @@ allergen certification; check every ingredient list. Constraints are never relax
 silently if the catalog is exhausted. Starting an idea only opens an unsaved entry;
 actual portions still need to be provided/analyzed. No suggestion creates a meal
 log automatically. This feature works without a model API call.
+
+Body-weight history is available through the top-bar scale icon; log a new kg value,
+tap an entry to correct it, or delete it. It is shared with the chat API.
+See [CHAT_API.md](CHAT_API.md) for API reporting, chat logging and integration setup.

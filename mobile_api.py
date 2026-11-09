@@ -6,13 +6,14 @@ import json
 import os
 import uuid
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 import analysis_engine as engine
 import meal_timing
 import meal_suggestions
+from photo_inputs import photo_from_request
 
 
 def register_mobile_api(app, db, User, Meal):
@@ -70,7 +71,7 @@ def register_mobile_api(app, db, User, Meal):
     def mobile_auth():
         # With a household token configured protect legacy endpoints too: otherwise they
         # would bypass authentication and still expose the same meals.
-        if request.path in ("/health", "/"):
+        if request.path in ("/health", "/", "/openapi.json"):
             return None
         token = os.getenv("MOBILE_API_TOKEN", "")
         if not token:
@@ -85,6 +86,11 @@ def register_mobile_api(app, db, User, Meal):
     def health():
         return jsonify(status="ok", api_version=2)
 
+    @app.get("/openapi.json")
+    def openapi_contract():
+        from api_contract import build_openapi
+        return jsonify(build_openapi(app))
+
     @api.errorhandler(ValueError)
     def bad_input(error):
         db.session.rollback()
@@ -96,7 +102,13 @@ def register_mobile_api(app, db, User, Meal):
         return jsonify(error="This change was already saved or conflicts with an existing record. Refresh and try again."), 409
 
     def body():
-        data = request.get_json(silent=True)
+        if request.mimetype == "multipart/form-data":
+            try:
+                data = json.loads(request.form.get("payload", ""))
+            except ValueError:
+                raise ValueError("Multipart uploads require a JSON payload form field") from None
+        else:
+            data = request.get_json(silent=True)
         if not isinstance(data, dict):
             raise ValueError("A JSON object is required")
         return data
@@ -138,7 +150,8 @@ def register_mobile_api(app, db, User, Meal):
         return dict(id=meal.id, user_id=meal.user_id, date=meal.date.isoformat() + "Z",
                     weight=meal.weight, description=meal.description or "Meal",
                     calories=meal.calories, protein=meal.protein, carbs=meal.carbs,
-                    fat=meal.fat, image_data=meal.image_data,
+                    fat=meal.fat, image_data=meal.image_data if (request.args.get("include_images") == "true" or request.headers.get("X-Meal-Client") == "android") else None,
+                    has_photo=bool(meal.image_data), revision=meal_signature(meal),
                     legacy_psoriasis_score=meal.psoriasis_score,
                     discipline=discipline,
                     analysis=json.loads(detail.analysis) if detail and detail.analysis else None,
@@ -151,7 +164,7 @@ def register_mobile_api(app, db, User, Meal):
             date=record.date.isoformat(),
             legacy_psoriasis_score=record.psoriasis_score,
             totals={n: getattr(record, n) for n in ("calories", "protein", "carbs", "fat")},
-            analysis=detail.analysis if detail else None), None)
+            analysis=detail.analysis if detail else None), record.image_data)
 
     def draft_data(draft):
         return dict(id=draft.id, user_id=draft.user_id, revision=draft.revision,
@@ -253,6 +266,7 @@ def register_mobile_api(app, db, User, Meal):
         record = db.session.get(Meal, meal_id)
         if not record:
             raise ValueError("Meal not found")
+        app.extensions["archive_meal"](record)
         Details.query.filter_by(meal_id=record.id).delete()
         Timing.query.filter_by(meal_id=record.id).delete()
         db.session.delete(record)
@@ -264,7 +278,7 @@ def register_mobile_api(app, db, User, Meal):
         data = body()
         profile = user(data.get("user_id"))
         description = text(data.get("text", ""))
-        photo = engine.normalize_photo(data.get("image_data"))
+        photo = photo_from_request(data)
         previous = None
         source_signature = None
         if data.get("source_meal_id"):
@@ -294,7 +308,18 @@ def register_mobile_api(app, db, User, Meal):
 
     @api.get("/analyses/<draft_id>")
     def read_analysis(draft_id):
-        return jsonify(draft_data(get_draft(draft_id)))
+        draft = get_draft(draft_id)
+        result = draft_data(draft)
+        result["has_photo"] = bool(draft.photo)
+        if request.args.get("include_context") == "true": result["context"] = json.loads(draft.context)
+        return jsonify(result)
+
+    @api.get("/analyses/<draft_id>/photo")
+    def draft_photo(draft_id):
+        draft = get_draft(draft_id)
+        if not draft.photo: return jsonify(error="No photo is stored in this draft"), 404
+        import base64
+        return Response(base64.b64decode(draft.photo), mimetype="image/jpeg", headers={"Cache-Control": "private, no-store"})
 
     @api.post("/analyses/<draft_id>/clarifications")
     def clarify(draft_id):
@@ -438,6 +463,11 @@ def register_mobile_api(app, db, User, Meal):
         if not batch:
             return jsonify(ideas=[], version=meal_suggestions.VERSION)
         payload = json.loads(batch.payload)
+        current_count = Meal.query.filter_by(user_id=profile.id).count()
+        current_latest_id = db.session.query(db.func.max(Meal.id)).filter(Meal.user_id == profile.id).scalar()
+        payload["needs_refresh"] = (payload.get("history_total") != current_count
+            or payload.get("latest_meal_id") != current_latest_id
+            or payload.get("generated_local_date") != datetime.now(meal_timing.zone()).date().isoformat())
         feedback = {f.recipe_id: f.action for f in SuggestionFeedback.query.filter_by(user_id=profile.id)}
         for idea in payload["ideas"]:
             idea["feedback"] = feedback.get(idea["id"])
@@ -473,7 +503,10 @@ def register_mobile_api(app, db, User, Meal):
         feedback = {f.recipe_id: f.action for f in SuggestionFeedback.query.filter_by(user_id=profile.id)}
         seed = SuggestionBatch.query.filter_by(user_id=profile.id).count()
         payload = meal_suggestions.suggest(history, excluded, feedback, avoid, seed)
-        payload.update(id=key, user_id=profile.id, avoid=avoid)
+        payload.update(id=key, user_id=profile.id, avoid=avoid, needs_refresh=False,
+            history_total=Meal.query.filter_by(user_id=profile.id).count(),
+            latest_meal_id=db.session.query(db.func.max(Meal.id)).filter(Meal.user_id == profile.id).scalar(),
+            generated_local_date=datetime.now(meal_timing.zone()).date().isoformat())
         db.session.add(SuggestionBatch(id=key, user_id=profile.id, payload=json.dumps(payload)))
         db.session.commit()
         return jsonify(payload), 201
@@ -502,6 +535,11 @@ def register_mobile_api(app, db, User, Meal):
         db.session.commit()
         return jsonify(success=True)
 
+    from records_api import register_record_routes
+    with app.app_context():
+        register_record_routes(api, db, User, Meal, Details, Draft, Timing,
+            dict(body=body, user=user, day=day, meal_date=meal_date, serialize=serialize,
+                 timing_input=timing_input, store_timing=store_timing, signature=meal_signature))
     app.extensions["mobile_timing_model"] = Timing
     app.register_blueprint(api)
     return Details

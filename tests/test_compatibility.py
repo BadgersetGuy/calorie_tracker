@@ -47,7 +47,7 @@ client=app.test_client()
 headers={'Authorization':'Bearer compatibility-test'}
 profiles=client.get('/api/v2/profiles',headers=headers)
 assert profiles.status_code==200, profiles.json
-meal=client.get('/api/v2/meals/42',headers=headers)
+meal=client.get('/api/v2/meals/42?include_images=true',headers=headers)
 assert meal.status_code==200,meal.json
 assert meal.json['image_data']=='existing-image'
 assert meal.json['calories']==600
