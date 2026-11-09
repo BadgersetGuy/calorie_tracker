@@ -1,6 +1,7 @@
 package com.badgerset.meals
 
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.os.Bundle
 import android.graphics.BitmapFactory
 import android.util.Base64
@@ -75,7 +76,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
         },
         bottomBar = {
             if (vm.connected) NavigationBar {
-                listOf("Today" to Icons.Outlined.Today, "Add meal" to Icons.Outlined.AddCircleOutline, "History" to Icons.Outlined.History).forEachIndexed { index, pair ->
+                listOf("Today" to Icons.Outlined.Today, "Add meal" to Icons.Outlined.AddCircleOutline, "History" to Icons.Outlined.History, "Ideas" to Icons.Outlined.Lightbulb).forEachIndexed { index, pair ->
                     NavigationBarItem(selected = vm.tab == index, onClick = { vm.navigate(index) }, enabled = !vm.busy,
                         icon = { Icon(pair.second, pair.first) }, label = { Text(pair.first) })
                 }
@@ -98,6 +99,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
                 EmptyState("Make room for both of you", "Create a profile for each person to keep meals and targets separate.", "Create profile") { showProfiles = true }
             } else when (vm.tab) {
                 1 -> AddMeal(vm)
+                3 -> MealIdeas(vm)
                 else -> MealList(vm, onTargets = { showTargets = true })
             }
         }
@@ -175,6 +177,8 @@ fun MealList(vm: MealViewModel, onTargets: () -> Unit) {
                         if (goal > 0) LinearProgressIndicator(progress = { (totals.optDouble("calories") / goal).toFloat().coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
                     }
                     MacroRow(totals)
+                    val timings = vm.meals.mapNotNull { it.optJSONObject("discipline") }
+                    if (timings.isNotEmpty()) Text("Discipline average: ${"%.1f".format(timings.map { it.getDouble("value") }.average())}/10 · 18:00 cutoff${if (timings.any { it.optBoolean("inferred") }) " · includes inferred times" else ""}", style = MaterialTheme.typography.bodySmall)
                     if (!history) TextButton(onClick = onTargets, enabled = !vm.busy) { Text("Edit daily targets") }
                 }
             }
@@ -192,6 +196,7 @@ fun MealList(vm: MealViewModel, onTargets: () -> Unit) {
                         }
                     }
                     meal.optJSONObject("analysis")?.optJSONObject("score")?.let { score -> Text("Dietary pattern  ${score.getInt("value")}/100", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary) }
+                    meal.optJSONObject("discipline")?.let { Text("Discipline ${it.getInt("value")}/10${if (it.optBoolean("inferred")) " · inferred time" else ""}", style = MaterialTheme.typography.labelMedium) }
                     if (meal.optJSONObject("analysis") == null && meal.has("legacy_psoriasis_score") && !meal.isNull("legacy_psoriasis_score")) {
                         Text("Historical score ${meal.optDouble("legacy_psoriasis_score")}/10", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -240,6 +245,11 @@ fun AddMeal(vm: MealViewModel) {
     LazyColumn(Modifier.fillMaxSize().imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { Text(if (vm.editSource > 0) "Update meal analysis" else "What's on your plate?", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             Text("For ${vm.currentProfile?.optString("username") ?: "you"}", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item {
+            Text("Eating time · ${vm.eatingTimezone}", style = MaterialTheme.typography.labelLarge)
+            EatingTimePicker(vm.eatenAt.toLocalDate(), vm.eatenAt.toLocalTime(), !vm.busy, vm::setEatingTime)
+            Text("Discipline: 10 through 18:00, then −1 per started 30 minutes, minimum 0. Your personal timing goal.", style = MaterialTheme.typography.bodySmall)
+        }
         if (vm.draft == null) {
             item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(onClick = {
@@ -391,6 +401,11 @@ fun MealDialog(vm: MealViewModel, meal: JSONObject) {
     AlertDialog(onDismissRequest = { if (!vm.busy) vm.mealDetail = null }, title = { Text("Meal details") }, text = {
         LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item { MealPhoto(meal.optString("image_data"), Modifier.fillMaxWidth().height(170.dp)) }
+            meal.optJSONObject("discipline")?.let { timing -> item {
+                Text("Discipline ${timing.getInt("value")}/10", style = MaterialTheme.typography.titleMedium)
+                Text("${timing.optString("local_eaten_at")} · ${timing.optString("timezone")}", style = MaterialTheme.typography.bodySmall)
+                Text(timing.optString("explanation"), style = MaterialTheme.typography.bodySmall)
+            } }
             item {
                 meal.optJSONObject("analysis")?.let { AnalysisResult(it) } ?: Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(meal.getString("description")); Text("${meal.number("calories")} kcal · ${meal.number("weight")} g"); MacroRow(meal)
@@ -414,6 +429,7 @@ fun CopyDialog(vm: MealViewModel, meal: JSONObject) {
     var amount by rememberSaveable { mutableStateOf("100") }
     var byWeight by rememberSaveable { mutableStateOf(false) }
     var date by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
+    var time by rememberSaveable { mutableStateOf(java.time.LocalTime.now().withSecond(0).withNano(0).toString()) }
     val context = LocalContext.current
     val factor = (amount.toDoubleOrNull() ?: 0.0) / (if (byWeight) meal.optDouble("weight", 0.0).coerceAtLeast(1.0) else 100.0)
     AlertDialog(onDismissRequest = { if (!vm.busy) vm.copyMeal = null }, title = { Text("Log this meal again") }, text = {
@@ -431,12 +447,58 @@ fun CopyDialog(vm: MealViewModel, meal: JSONObject) {
             OutlinedTextField(amount, { amount = it }, singleLine = true, label = { Text(if (byWeight) "New portion (g)" else "Portion (%)") },
                 supportingText = { Text(if (byWeight) "Original: ${meal.number("weight")} g" else "100% is the same meal; 70% is a smaller portion") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), enabled = !vm.busy)
             Text("${"%.0f".format(meal.optDouble("calories") * factor)} kcal · ${"%.0f".format(meal.optDouble("protein") * factor)} g protein", style = MaterialTheme.typography.titleMedium)
-            OutlinedButton(onClick = {
-                val d = LocalDate.parse(date)
-                DatePickerDialog(context, { _, y, m, day -> date = LocalDate.of(y, m + 1, day).toString() }, d.year, d.monthValue - 1, d.dayOfMonth).show()
-            }, enabled = !vm.busy) { Icon(Icons.Outlined.CalendarMonth, null); Spacer(Modifier.width(8.dp)); Text(date) }
+            EatingTimePicker(LocalDate.parse(date), java.time.LocalTime.parse(time), !vm.busy) { d, t -> date = d.toString(); time = t.toString() }
             Text("The original stays in history. Calories and macros scale with your portion; the composition score stays the same.", style = MaterialTheme.typography.bodySmall)
+            Text("Discipline is recalculated for the new eating time.", style = MaterialTheme.typography.bodySmall)
         }
-    }, confirmButton = { TextButton(onClick = { vm.copyTo(target, amount, byWeight, LocalDate.parse(date)) }, enabled = !vm.busy && target > 0 && factor > 0) { Text(if (vm.busy) "Copying…" else "Copy meal") } },
+    }, confirmButton = { TextButton(onClick = { vm.copyTo(target, amount, byWeight, LocalDate.parse(date), java.time.LocalTime.parse(time)) }, enabled = !vm.busy && target > 0 && factor > 0) { Text(if (vm.busy) "Copying…" else "Copy meal") } },
         dismissButton = { TextButton(onClick = { vm.copyMeal = null }, enabled = !vm.busy) { Text("Cancel") } })
+}
+
+@Composable
+fun EatingTimePicker(date: LocalDate, time: java.time.LocalTime, enabled: Boolean, changed: (LocalDate, java.time.LocalTime) -> Unit) {
+    val context = LocalContext.current
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = {
+            DatePickerDialog(context, { _, y, m, d -> changed(LocalDate.of(y, m + 1, d), time) }, date.year, date.monthValue - 1, date.dayOfMonth).show()
+        }, enabled = enabled) { Text(date.toString()) }
+        OutlinedButton(onClick = {
+            TimePickerDialog(context, { _, h, m -> changed(date, java.time.LocalTime.of(h, m)) }, time.hour, time.minute, true).show()
+        }, enabled = enabled) { Icon(Icons.Outlined.Schedule, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(time.format(DateTimeFormatter.ofPattern("HH:mm"))) }
+    }
+}
+
+@Composable
+fun MealIdeas(vm: MealViewModel) {
+    val ideas = vm.ideas
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { Text("Something good to eat", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+            Text("Familiar ingredients, fresh combinations.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { OutlinedTextField(vm.avoidIngredients, { vm.avoidIngredients = it }, Modifier.fillMaxWidth(), label = { Text("Avoid ingredients · optional") },
+            supportingText = { Text("Separate with commas, e.g. fish, nuts, dairy. Check each ingredient list.") }, enabled = !vm.busy) }
+        item { Button(onClick = vm::newIdeas, Modifier.fillMaxWidth(), enabled = !vm.busy) { Text(if (ideas == null) "Find meal ideas" else "Show different ideas") } }
+        ideas?.optJSONArray("preferences")?.objects()?.takeIf { it.isNotEmpty() }?.let { preferences -> item {
+            Text("Often in your history: " + preferences.joinToString { "${it.getString("ingredient")} (${it.getInt("meals")} meals)" }, style = MaterialTheme.typography.bodySmall)
+        } }
+        ideas?.optJSONArray("ideas")?.objects()?.let { recipes ->
+            items(recipes, key = { it.getString("id") }) { recipe ->
+                Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(recipe.getString("title"), style = MaterialTheme.typography.titleLarge)
+                    Text(recipe.getJSONArray("ingredients").strings().joinToString(", "), style = MaterialTheme.typography.bodyLarge)
+                    Text(recipe.getString("steps"))
+                    Text(recipe.getString("why"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    recipe.optJSONArray("tags")?.strings()?.takeIf { it.isNotEmpty() }?.let { Text("Ingredient flags: ${it.joinToString()}", style = MaterialTheme.typography.bodySmall) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = recipe.optString("feedback") == "like", onClick = { vm.ideaFeedback(recipe.getString("id"), if (recipe.optString("feedback") == "like") "clear" else "like") }, label = { Text("Like") }, enabled = !vm.busy)
+                        TextButton(onClick = { vm.ideaFeedback(recipe.getString("id"), "skip") }, enabled = !vm.busy) { Text("Skip") }
+                    }
+                    OutlinedButton(onClick = { vm.useIdea(recipe) }, enabled = !vm.busy) { Text("Start meal entry") }
+                } }
+            }
+            if (recipes.isEmpty()) item { Text(ideas.optString("empty_reason", "No ideas left in this batch. Tap Show different ideas.")) }
+        }
+        item { Text(ideas?.optString("note") ?: "Meal ideas draw on Mediterranean-style foods. Repeated logging is a preference hint, not proof that you enjoyed something.", style = MaterialTheme.typography.bodySmall) }
+        item { LinkText("Research behind the dietary pattern", "https://jamanetwork.com/journals/jamadermatology/fullarticle/2839013") }
+        item { TextButton(onClick = vm::clearIdeaFeedback, enabled = !vm.busy) { Text("Reset likes and skips") } }
+    }
 }

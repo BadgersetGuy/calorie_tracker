@@ -8,3 +8,4 @@ Werkzeug==2.3.7
 flask-wtf==1.2.1
 gunicorn==21.2.0
 jsonschema==4.23.0
+tzdata==2026.6

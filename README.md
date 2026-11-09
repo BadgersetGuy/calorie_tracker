@@ -3,7 +3,8 @@
 A native Android meal diary with a Flask backend. Photograph a meal or describe it in
 text, answer focused clarification questions, review the estimate, and save. Correct an
 analysis with more detail. Reuse meals from history for yourself or another household
-profile with a percentage or gram adjustment.
+profile with a percentage or gram adjustment. Track a personal 18:00 eating-time goal
+and get rotating, history-informed meal ideas.
 
 The Kotlin / Jetpack Compose app lives in `android/`. The existing web interface remains
 in `templates/` for reference; it is not used by the Android app.

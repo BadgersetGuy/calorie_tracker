@@ -69,6 +69,12 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     var historyAll by mutableStateOf(true)
     var historySearch by mutableStateOf("")
     var historyTotal by mutableIntStateOf(0)
+    var ideas by mutableStateOf<JSONObject?>(null)
+    var avoidIngredients by mutableStateOf("")
+    private var ideaRequestKey = UUID.randomUUID().toString()
+    private var ideaRequestContext = ""
+    var eatenAt by mutableStateOf(prefs.getString("eatenAt", null)?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() } ?: OffsetDateTime.now())
+    var eatingTimezone by mutableStateOf(prefs.getString("eatingTimezone", ZoneId.systemDefault().id)!!)
     var description by mutableStateOf(prefs.getString("description", "")!!)
     var weight by mutableStateOf(prefs.getString("weight", "")!!)
     var photoUri by mutableStateOf(prefs.getString("photo", null)?.let(Uri::parse))
@@ -85,7 +91,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     init { if (token.isNotBlank()) connect() }
 
     fun persistEntry() { prefs.edit().putString("description", description).putString("weight", weight)
-        .putString("photo", photoUri?.toString()).putInt("editSource", editSource).apply() }
+        .putString("photo", photoUri?.toString()).putInt("editSource", editSource).putString("eatenAt", eatenAt.toString()).putString("eatingTimezone", eatingTimezone).apply() }
     fun rememberCamera(uri: Uri) { cameraUri = uri; prefs.edit().putString("camera", uri.toString()).apply() }
 
     private suspend fun api(path: String, method: String = "GET", data: JSONObject? = null): String = withContext(Dispatchers.IO) {
@@ -143,6 +149,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun loadMeals() {
         if (profileId == 0) { meals = emptyList(); return }
+        if (tab == 3) { loadIdeas(); return }
         if (tab == 2 && historyAll) {
             val query = java.net.URLEncoder.encode(historySearch, "UTF-8")
             val response = JSONObject(api("/history?user_id=$profileId&query=$query"))
@@ -154,10 +161,15 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         meals = JSONArray(api("/meals?user_id=$profileId&date=$activeDate&offset_minutes=$offset")).objects()
     }
     fun refresh() = work { loadMeals() }
-    fun navigate(value: Int) { if (!busy) { tab = value; refresh() } }
+    fun navigate(value: Int) { if (!busy) {
+        if (value == 1 && draft == null && description.isBlank() && photoUri == null && !prefs.contains("eatenAt")) {
+            eatenAt = OffsetDateTime.now(); eatingTimezone = ZoneId.systemDefault().id
+        }
+        tab = value; refresh()
+    } }
     fun selectProfile(id: Int) {
         if (busy || draft != null || editSource != 0) { error = "Save or discard your current analysis before switching profiles."; return }
-        profileId = id; prefs.edit().putInt("profile", id).apply(); refresh()
+        profileId = id; ideas = null; prefs.edit().putInt("profile", id).apply(); refresh()
     }
     fun createProfile(name: String) = work {
         require(draft == null && editSource == 0) { "Save or discard the current analysis before creating a profile." }
@@ -243,27 +255,33 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     fun reloadDraft() = work { draft?.let { draft = JSONObject(api("/analyses/${it.getString("id")}")) } }
     fun save() = work {
         val current = draft ?: return@work
-        val data = JSONObject().put("revision", current.getInt("revision")).put("date", OffsetDateTime.now().toString())
+        val data = JSONObject().put("revision", current.getInt("revision")).put("eaten_at", eatenAt.toString()).put("timezone", eatingTimezone)
         if (editSource > 0) data.put("replace_meal_id", editSource)
         api("/analyses/${current.getString("id")}/save", "POST", data)
         resetEntry(); tab = 0; loadMeals(); notice = "Meal saved"
     }
     fun resetEntry() {
         draft = null; description = ""; weight = ""; photoUri = null; clarification = ""; editSource = 0
-        prefs.edit().remove("draft").remove("description").remove("weight").remove("photo").remove("editSource").apply()
+        eatenAt = OffsetDateTime.now()
+        eatingTimezone = ZoneId.systemDefault().id
+        prefs.edit().remove("draft").remove("description").remove("weight").remove("photo").remove("editSource").remove("eatenAt").remove("eatingTimezone").apply()
     }
     fun reanalyze(meal: JSONObject) {
         if (draft != null || description.isNotBlank() || photoUri != null) { error = "Save or discard your current entry first."; return }
         profileId = meal.getInt("user_id"); editSource = meal.getInt("id")
+        val timing = meal.optJSONObject("discipline")
+        eatingTimezone = timing?.optString("timezone")?.takeIf { it.isNotBlank() } ?: ZoneId.systemDefault().id
+        eatenAt = OffsetDateTime.parse(meal.getString("date")).atZoneSameInstant(ZoneId.of(eatingTimezone)).toOffsetDateTime()
         description = meal.getString("description"); mealDetail = null; tab = 1; persistEntry()
     }
     fun openCopy(meal: JSONObject) { copyMeal = meal; copyKey = UUID.randomUUID().toString() }
-    fun copyTo(target: Int, amount: String, byWeight: Boolean, date: LocalDate) = work {
+    fun copyTo(target: Int, amount: String, byWeight: Boolean, date: LocalDate, time: java.time.LocalTime) = work {
         val meal = copyMeal ?: return@work
         val value = amount.toDoubleOrNull()
         require(value != null && value > 0) { "Enter a positive portion" }
         val data = JSONObject().put("user_id", target).put(if (byWeight) "weight" else "portion_percent", value)
-            .put("date", date.atTime(java.time.LocalTime.now()).atZone(ZoneId.systemDefault()).toOffsetDateTime().toString())
+            .put("eaten_at", date.atTime(time).atZone(ZoneId.systemDefault()).toOffsetDateTime().toString())
+            .put("timezone", ZoneId.systemDefault().id)
             .put("request_key", copyKey)
         api("/meals/${meal.getInt("id")}/copy", "POST", data)
         copyMeal = null; mealDetail = null; loadMeals(); notice = "Meal copied"
@@ -271,9 +289,43 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteMeal(meal: JSONObject) = work {
         api("/meals/${meal.getInt("id")}", "DELETE"); mealDetail = null; loadMeals(); notice = "Meal deleted"
     }
+    fun setEatingTime(date: LocalDate, time: java.time.LocalTime) {
+        eatenAt = date.atTime(time).atZone(ZoneId.of(eatingTimezone)).toOffsetDateTime(); persistEntry()
+    }
+    private suspend fun loadIdeas() {
+        avoidIngredients = prefs.getString("avoid-$profileId", "")!!
+        ideas = JSONObject(api("/suggestions?user_id=$profileId"))
+        if (!ideas!!.has("id")) generateIdeas()
+        else avoidIngredients = ideas!!.optJSONArray("avoid")?.strings()?.joinToString(", ") ?: ""
+    }
+    private suspend fun generateIdeas() {
+        val requestContext = "$profileId:$avoidIngredients"
+        if (requestContext != ideaRequestContext) { ideaRequestContext = requestContext; ideaRequestKey = UUID.randomUUID().toString() }
+        val avoid = JSONArray(avoidIngredients.split(',').map { it.trim() }.filter { it.isNotEmpty() })
+        val data = JSONObject().put("user_id", profileId).put("avoid", avoid).put("request_key", ideaRequestKey)
+        ideas = JSONObject(api("/suggestions", "POST", data))
+        prefs.edit().putString("avoid-$profileId", avoidIngredients).apply()
+        ideaRequestKey = UUID.randomUUID().toString()
+    }
+    fun newIdeas() = work { generateIdeas() }
+    fun ideaFeedback(id: String, action: String) = work {
+        api("/suggestions/$id/feedback", "PUT", JSONObject().put("user_id", profileId).put("action", action))
+        ideas = JSONObject(api("/suggestions?user_id=$profileId"))
+    }
+    fun clearIdeaFeedback() = work {
+        api("/suggestions/feedback", "DELETE", JSONObject().put("user_id", profileId))
+        ideas = JSONObject(api("/suggestions?user_id=$profileId"))
+        notice = "Likes and skips reset for this profile"
+    }
+    fun useIdea(idea: JSONObject) {
+        if (draft != null || description.isNotBlank() || photoUri != null) { error = "Save or discard your current entry before starting another meal."; return }
+        resetEntry()
+        description = idea.getString("title") + ". Ingredients: " + idea.getJSONArray("ingredients").strings().joinToString() + ". I'll specify my actual portion."
+        persistEntry(); tab = 1
+    }
     fun disconnect() {
         if (busy) return
-        connected = false; token = ""; profiles = emptyList(); meals = emptyList(); mealDetail = null
+        connected = false; token = ""; profiles = emptyList(); meals = emptyList(); mealDetail = null; ideas = null
         resetEntry(); prefs.edit().remove("token").remove("profile").apply()
     }
 }

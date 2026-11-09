@@ -410,6 +410,7 @@ def delete_meal(meal_id):
             return jsonify({'error': 'Unauthorized'}), 403
 
         MobileMealDetails.query.filter_by(meal_id=meal.id).delete()
+        app.extensions['mobile_timing_model'].query.filter_by(meal_id=meal.id).delete()
         db.session.delete(meal)
         db.session.commit()
         return jsonify({'success': True})

@@ -2,7 +2,7 @@
 
 9 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 26 tests passed, temporary SQLite database.
+- `python -m unittest discover -s tests -q`: 42 tests passed, temporary SQLite database.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).

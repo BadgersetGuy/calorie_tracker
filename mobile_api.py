@@ -11,6 +11,8 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 import analysis_engine as engine
+import meal_timing
+import meal_suggestions
 
 
 def register_mobile_api(app, db, User, Meal):
@@ -39,9 +41,28 @@ def register_mobile_api(app, db, User, Meal):
         key = db.Column(db.String(64), primary_key=True)
         result = db.Column(db.Text, nullable=False)
 
+    class Timing(db.Model):
+        __tablename__ = "mobile_meal_timing"
+        meal_id = db.Column(db.Integer, db.ForeignKey("meal.id"), primary_key=True)
+        score_data = db.Column(db.Text, nullable=False)
+
+    class SuggestionBatch(db.Model):
+        __tablename__ = "mobile_suggestion_batch"
+        id = db.Column(db.String(36), primary_key=True)
+        user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+        created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+        payload = db.Column(db.Text, nullable=False)
+
+    class SuggestionFeedback(db.Model):
+        __tablename__ = "mobile_suggestion_feedback"
+        user_id = db.Column(db.Integer, db.ForeignKey("user.id"), primary_key=True)
+        recipe_id = db.Column(db.String(80), primary_key=True)
+        action = db.Column(db.String(10), nullable=False)
+
     with app.app_context():
         # Only create these additive tables. Do not alter live tables or overwrite old scores.
-        db.metadata.create_all(db.engine, tables=[Draft.__table__, Details.__table__, CachedAnalysis.__table__])
+        db.metadata.create_all(db.engine, tables=[Draft.__table__, Details.__table__, CachedAnalysis.__table__,
+            Timing.__table__, SuggestionBatch.__table__, SuggestionFeedback.__table__])
 
     api = Blueprint("mobile", __name__, url_prefix="/api/v2")
 
@@ -112,11 +133,14 @@ def register_mobile_api(app, db, User, Meal):
 
     def serialize(meal):
         detail = db.session.get(Details, meal.id)
+        timing = db.session.get(Timing, meal.id)
+        discipline = json.loads(timing.score_data) if timing else meal_timing.score(meal_timing.local_time(meal.date), inferred=True)
         return dict(id=meal.id, user_id=meal.user_id, date=meal.date.isoformat() + "Z",
                     weight=meal.weight, description=meal.description or "Meal",
                     calories=meal.calories, protein=meal.protein, carbs=meal.carbs,
                     fat=meal.fat, image_data=meal.image_data,
                     legacy_psoriasis_score=meal.psoriasis_score,
+                    discipline=discipline,
                     analysis=json.loads(detail.analysis) if detail and detail.analysis else None,
                     source_meal_id=detail.source_meal_id if detail else None)
 
@@ -124,6 +148,7 @@ def register_mobile_api(app, db, User, Meal):
         detail = db.session.get(Details, record.id)
         # Snapshot used to detect edits from a second phone while a draft is open.
         return engine.fingerprint(dict(id=record.id, weight=record.weight, description=record.description,
+            date=record.date.isoformat(),
             legacy_psoriasis_score=record.psoriasis_score,
             totals={n: getattr(record, n) for n in ("calories", "protein", "carbs", "fat")},
             analysis=detail.analysis if detail else None), None)
@@ -137,6 +162,18 @@ def register_mobile_api(app, db, User, Meal):
         if not draft:
             raise ValueError("Analysis draft was not found")
         return draft
+
+    def timing_input(data):
+        timestamp = data.get("eaten_at") or data.get("date")
+        utc = meal_date(timestamp)
+        local = (meal_timing.confirmed_time(timestamp, data.get("timezone")) if data.get("eaten_at")
+                 else meal_timing.local_time(utc, data.get("timezone")))
+        return utc, local
+
+    def store_timing(record, local):
+        timing = db.session.get(Timing, record.id) or Timing(meal_id=record.id)
+        timing.score_data = json.dumps(meal_timing.score(local))
+        db.session.add(timing)
 
     def perform(context, photo):
         key = engine.fingerprint(context, photo)
@@ -217,6 +254,7 @@ def register_mobile_api(app, db, User, Meal):
         if not record:
             raise ValueError("Meal not found")
         Details.query.filter_by(meal_id=record.id).delete()
+        Timing.query.filter_by(meal_id=record.id).delete()
         db.session.delete(record)
         db.session.commit()
         return jsonify(success=True)
@@ -319,8 +357,13 @@ def register_mobile_api(app, db, User, Meal):
                 raise ValueError("This analysis cannot replace that meal")
             if context.get("source_signature") != meal_signature(record):
                 return jsonify(error="This meal changed on another device. Start a fresh analysis from History."), 409
+            if data.get("eaten_at"):
+                record.date, local = timing_input(data)
+            else:
+                local = None
         else:
-            record = Meal(user_id=draft.user_id, date=meal_date(data.get("date")))
+            utc, local = timing_input(data)
+            record = Meal(user_id=draft.user_id, date=utc)
         record.description = result["description"]
         record.weight = result["weight"]
         record.image_data = draft.photo
@@ -328,6 +371,8 @@ def register_mobile_api(app, db, User, Meal):
             setattr(record, nutrient, result["totals"][nutrient])
         db.session.add(record)
         db.session.flush()
+        if local is not None:
+            store_timing(record, local)
         claimed = db.session.execute(update(Draft).where(Draft.id == draft.id,
             Draft.revision == int(data["revision"]), Draft.saved_meal_id.is_(None)).values(saved_meal_id=record.id))
         if claimed.rowcount != 1:
@@ -347,7 +392,7 @@ def register_mobile_api(app, db, User, Meal):
         if not original:
             raise ValueError("Original meal not found")
         target = user(data.get("user_id"))
-        stamp = meal_date(data.get("date"))
+        stamp, local = timing_input(data)
         key = text(data.get("request_key", ""), 36)
         try:
             uuid.UUID(key)
@@ -361,7 +406,8 @@ def register_mobile_api(app, db, User, Meal):
             factor = engine.positive(data["weight"], "Weight", False, 20000) / original.weight
         else:
             factor = engine.positive(data["portion_percent"], "Portion percent", False, 1000) / 100
-        signature = engine.fingerprint(dict(source=meal_id, target=target.id, date=stamp.isoformat(), factor=factor), None)
+        signature = engine.fingerprint(dict(source=meal_id, target=target.id, date=stamp.isoformat(),
+            timezone=str(local.tzinfo), factor=factor), None)
         existing = Details.query.filter_by(request_key=key).first()
         if existing:
             if existing.copy_signature != signature:
@@ -379,10 +425,83 @@ def register_mobile_api(app, db, User, Meal):
             **{n: getattr(original, n) * factor for n in ("calories", "protein", "carbs", "fat")})
         db.session.add(record)
         db.session.flush()
+        store_timing(record, local)
         db.session.add(Details(meal_id=record.id, analysis=json.dumps(analysis) if analysis else None,
             source_meal_id=original.id, request_key=key, copy_signature=signature))
         db.session.commit()
         return jsonify(serialize(record)), 201
 
+    @api.get("/suggestions")
+    def latest_suggestions():
+        profile = user(request.args.get("user_id"))
+        batch = SuggestionBatch.query.filter_by(user_id=profile.id).order_by(SuggestionBatch.created_at.desc()).first()
+        if not batch:
+            return jsonify(ideas=[], version=meal_suggestions.VERSION)
+        payload = json.loads(batch.payload)
+        feedback = {f.recipe_id: f.action for f in SuggestionFeedback.query.filter_by(user_id=profile.id)}
+        for idea in payload["ideas"]:
+            idea["feedback"] = feedback.get(idea["id"])
+        payload["ideas"] = [idea for idea in payload["ideas"] if idea.get("feedback") != "skip"]
+        return jsonify(payload)
+
+    @api.post("/suggestions")
+    def new_suggestions():
+        data = body()
+        profile = user(data.get("user_id"))
+        key = text(data.get("request_key", ""), 36)
+        try:
+            uuid.UUID(key)
+        except ValueError:
+            raise ValueError("A unique suggestion request key is required") from None
+        avoid = data.get("avoid", [])
+        if not isinstance(avoid, list) or len(avoid) > 30:
+            raise ValueError("Enter up to 30 excluded ingredients")
+        avoid = sorted({text(word, 80).casefold() for word in avoid if text(word, 80)})
+        old = db.session.get(SuggestionBatch, key)
+        if old:
+            payload = json.loads(old.payload)
+            if old.user_id != profile.id or payload.get("avoid", []) != avoid:
+                return jsonify(error="Suggestion request key was already used"), 409
+            return jsonify(payload)
+        history = []
+        for record in Meal.query.filter_by(user_id=profile.id).order_by(Meal.date.desc(), Meal.id.desc()).limit(120):
+            detail = db.session.get(Details, record.id)
+            analysis = json.loads(detail.analysis) if detail and detail.analysis else {}
+            history.append(dict(description=record.description or "", ingredients=[i["name"] for i in analysis.get("ingredients", [])]))
+        batches = SuggestionBatch.query.filter_by(user_id=profile.id).order_by(SuggestionBatch.created_at.desc()).limit(2).all()
+        excluded = {i["id"] for b in batches for i in json.loads(b.payload)["ideas"]}
+        feedback = {f.recipe_id: f.action for f in SuggestionFeedback.query.filter_by(user_id=profile.id)}
+        seed = SuggestionBatch.query.filter_by(user_id=profile.id).count()
+        payload = meal_suggestions.suggest(history, excluded, feedback, avoid, seed)
+        payload.update(id=key, user_id=profile.id, avoid=avoid)
+        db.session.add(SuggestionBatch(id=key, user_id=profile.id, payload=json.dumps(payload)))
+        db.session.commit()
+        return jsonify(payload), 201
+
+    @api.put("/suggestions/<recipe_id>/feedback")
+    def suggestion_feedback(recipe_id):
+        data = body()
+        profile = user(data.get("user_id"))
+        action = data.get("action")
+        if recipe_id not in meal_suggestions.BY_ID or action not in ("like", "skip", "clear"):
+            raise ValueError("Choose Like, Skip, or Clear for an existing idea")
+        feedback = db.session.get(SuggestionFeedback, (profile.id, recipe_id))
+        if action == "clear":
+            if feedback: db.session.delete(feedback)
+        else:
+            feedback = feedback or SuggestionFeedback(user_id=profile.id, recipe_id=recipe_id)
+            feedback.action = action
+            db.session.add(feedback)
+        db.session.commit()
+        return jsonify(success=True)
+
+    @api.delete("/suggestions/feedback")
+    def clear_suggestion_feedback():
+        profile = user(body().get("user_id"))
+        SuggestionFeedback.query.filter_by(user_id=profile.id).delete()
+        db.session.commit()
+        return jsonify(success=True)
+
+    app.extensions["mobile_timing_model"] = Timing
     app.register_blueprint(api)
     return Details

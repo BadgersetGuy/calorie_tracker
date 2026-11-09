@@ -5,7 +5,7 @@ The Flask server retains the database, photos, analysis credentials, and househo
 
 ## What is implemented
 
-- Today, Add meal and History; household profiles and daily targets.
+- Today, Add meal, History and Ideas; household profiles and daily targets.
 - Search all past meals, page through older results, or browse a specific date.
 - Native camera intent and photo picker, optional photo, free-text meal/portion input.
 - Persisted analysis drafts, targeted clarification questions and text corrections.
@@ -56,7 +56,8 @@ nullable Meal `psoriasis_score`, legacy target/deletion/history routes, and curr
 template. Android reads and writes the same User target columns as the legacy API;
 there is no second source of target settings.
 
-Three new `mobile_*` tables store analysis drafts, meal details, and cached analyses.
+Additional `mobile_*` tables store analysis drafts, meal details, cached analyses,
+confirmed meal timing, suggestion batches and per-profile suggestion feedback.
 Startup creates missing tables but does not alter existing columns or rewrite old rows.
 Historical 1–10 psoriasis scores remain in `meal.psoriasis_score`, are returned separately
 as `legacy_psoriasis_score`, and are copied unchanged with a meal. New 0–100 dietary-pattern
@@ -139,3 +140,34 @@ clarification can still alter estimates; deterministic arithmetic does not make 
 or nutrition extraction exact.
 
 References, interpretation and the exact score definition: [SCORING.md](SCORING.md).
+
+
+## Discipline and meal ideas
+
+Discipline is a separate personal timing goal, not an inflammation/medical score.
+Through 18:00 local eating time it is 10. After that, subtract one point for each
+started 30-minute interval, to a floor of 0: 19:00=8, 20:00=6, 23:00=0. The next
+calendar day starts a new goal day. This rule is versioned as `discipline-18h-1.0`.
+
+Use the eating date/time controls when logging later. Confirmed scores retain the
+original local timestamp, timezone and version, independently of analysis time.
+Reanalysis preserves the original timezone even if the phone has travelled. Meal
+copies use the new eating time. For old records with no confirmed local time, the
+app marks the score as inferred, using HOUSEHOLD_TIMEZONE (default Europe/Bucharest).
+Daily discipline is the arithmetic mean of logged meal scores; an empty day has no
+score. It is never combined with the food composition score.
+
+Ideas use an initial catalog of 18 Mediterranean-style dishes and ingredient lists.
+Ranking reads up to 120 recent meals for that profile, including legacy descriptions
+and structured ingredient names (with common Romanian aliases). Ingredients logged
+at least twice are familiarity signals, not proof of enjoyment. New ingredients get
+a novelty bonus, ingredients in the last seven meals are down-ranked, and the last
+two suggestion batches are excluded. The batch favours different food groups.
+
+Like adds a preference signal; Skip excludes an idea until that profile resets
+likes/skips. Avoid ingredients are applied before ranking, and persisted in the
+latest batch so both phones can see them. These are text/tag filters, not a clinical
+allergen certification; check every ingredient list. Constraints are never relaxed
+silently if the catalog is exhausted. Starting an idea only opens an unsaved entry;
+actual portions still need to be provided/analyzed. No suggestion creates a meal
+log automatically. This feature works without a model API call.
