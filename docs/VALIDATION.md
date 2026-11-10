@@ -46,7 +46,14 @@ pass with these versions. pip-audit reports no known vulnerabilities in the upda
 local Python environment; this is not an OS/container-image vulnerability assessment.
 Gunicorn HTTP smoke checks on a temporary database pass for health, rejected unauthenticated
 access, and authenticated profile access. The container build upgrades pip to 26.3.
-GitHub Actions deployment credentials now work. The existing Machine and persistent
-volume were verified, and private SQLite backups passed integrity checks. The live
-vision-access probe now succeeds for gpt-6.1-sol after API credit was added. Deployment
-is being retried after fixing Fly configuration export to an existing private file.
+Production deployment succeeded on 10 November 2026 from commit
+`47e251db05d3e41789f91a7a867ae5d5d72a1e44`:
+https://github.com/BadgersetGuy/calorie_tracker/actions/runs/42849314508 .
+The existing Machine/data volume, private backup integrity, current SQLite integrity,
+preserved meal/profile counts, authenticated profiles and a real structured text-meal
+analysis passed. The selected model is gpt-6.1-sol; its synthetic-image access probe
+also passed. No test meal was inserted into household history. Public health confirms
+the deployed revision, and private/legacy data routes reject unauthenticated requests.
+The live OpenAPI contract includes all 30 operations, including ingredient editing.
+These checks do not establish photo-recognition accuracy or real-device UX quality.
+The household runtime token is separate from the Fly deployment credential.

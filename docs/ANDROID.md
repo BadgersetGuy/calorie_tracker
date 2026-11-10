@@ -50,7 +50,7 @@ Run with a timeout that accommodates analysis:
 gunicorn --bind 0.0.0.0:8080 --workers 2 --timeout 150 app:app
 ```
 
-`GET /health` should return `{"api_version":2,"status":"ok"}`. New data endpoints are
+`GET /health` returns `api_version: 2`, `status: "ok"` and the deployed `release` commit. New data endpoints are
 under `/api/v2`. Android access fails closed until `MOBILE_API_TOKEN` is configured.
 Once configured, the legacy data routes also require the same token. The old web UI
 does not supply that token and will no longer load household data.
