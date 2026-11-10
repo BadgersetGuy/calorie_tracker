@@ -78,7 +78,6 @@ def build_openapi(app):
                     params.append(dict(name="user_id", **{"in": "query"}, required=True, schema=I))
                 if short in ("/history", "/analyses", "/weights", "/logs"):
                     for name in ("offset", "limit"):
-                        if name == "limit" and short == "/history": continue
                         params.append(dict(name=name, **{"in": "query"}, schema=I))
                 if short in ("/summaries", "/weights"):
                     for name in ("date", "start", "end", "timezone"):
@@ -87,6 +86,10 @@ def build_openapi(app):
                 if short == "/meals":
                     params.extend([dict(name="date", **{"in": "query"}, schema=S), dict(name="offset_minutes", **{"in": "query"}, schema=I)])
                 if short == "/history": params.append(dict(name="query", **{"in": "query"}, schema=S))
+                if short in ("/meals", "/history"):
+                    params.append(dict(name="view", **{"in": "query"}, schema=dict(type="string", enum=["full", "summary"]), description="Summary returns lightweight list metadata and scores, without photos, ingredient details or edit revisions. Fetch the meal before editing it."))
+                if short == "/meals/{meal_id}/photo":
+                    params.append(dict(name="size", **{"in": "query"}, schema=dict(type="string", enum=["original", "thumbnail", "preview"]), description="Thumbnail is at most 192 pixels; preview uses the current 1280-pixel/200-KiB policy. The stored original is not modified."))
                 if short == "/analyses/{draft_id}": params.append(dict(name="include_context", **{"in": "query"}, schema={"type": "boolean"}))
             if "/photo" not in short and (short.startswith("/meals") or short in ("/history", "/summaries", "/analyses/{draft_id}/save")):
                 params.append(dict(name="include_images", **{"in": "query"}, schema={"type": "boolean", "default": False}, description="False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."))

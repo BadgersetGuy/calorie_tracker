@@ -9,6 +9,7 @@ import uuid
 from flask import Blueprint, jsonify, request, Response
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import defer
 
 import analysis_engine as engine
 import meal_timing
@@ -75,7 +76,7 @@ def register_mobile_api(app, db, User, Meal):
             return None
         token = os.getenv("MOBILE_API_TOKEN", "")
         if not token:
-            if request.path.startswith("/api/v2"):
+            if request.path.startswith("/api/v2") or request.path == "/mcp":
                 return jsonify(error="Android access is not configured on the server"), 503
             return None
         provided = request.headers.get("Authorization", "")
@@ -150,12 +151,32 @@ def register_mobile_api(app, db, User, Meal):
         return dict(id=meal.id, user_id=meal.user_id, date=meal.date.isoformat() + "Z",
                     weight=meal.weight, description=meal.description or "Meal",
                     calories=meal.calories, protein=meal.protein, carbs=meal.carbs,
-                    fat=meal.fat, image_data=meal.image_data if (request.args.get("include_images") == "true" or request.headers.get("X-Meal-Client") == "android") else None,
+                    fat=meal.fat, image_data=meal.image_data if (request.args.get("include_images") == "true" or (request.args.get("include_images") != "false" and request.headers.get("X-Meal-Client") == "android")) else None,
                     has_photo=bool(meal.image_data), revision=meal_signature(meal),
                     legacy_psoriasis_score=meal.psoriasis_score,
                     discipline=discipline,
                     analysis=json.loads(detail.analysis) if detail and detail.analysis else None,
                     source_meal_id=detail.source_meal_id if detail else None)
+
+    def summaries(query):
+        # Avoid selecting large historical photos, hashing them for revisions, or
+        # running per-row metadata queries merely to draw a list.
+        rows = query.options(defer(Meal.image_data)).add_columns(Meal.image_data.isnot(None)).all()
+        ids = [meal.id for meal, _ in rows]
+        details = {d.meal_id: d for d in Details.query.filter(Details.meal_id.in_(ids)).all()} if ids else {}
+        timings = {t.meal_id: t for t in Timing.query.filter(Timing.meal_id.in_(ids)).all()} if ids else {}
+        result = []
+        for meal, photo in rows:
+            detail, timing = details.get(meal.id), timings.get(meal.id)
+            analysis = json.loads(detail.analysis) if detail and detail.analysis else None
+            result.append(dict(id=meal.id, user_id=meal.user_id, date=meal.date.isoformat() + "Z",
+                weight=meal.weight, description=meal.description or "Meal", calories=meal.calories,
+                protein=meal.protein, carbs=meal.carbs, fat=meal.fat, has_photo=bool(photo),
+                legacy_psoriasis_score=meal.psoriasis_score,
+                discipline=json.loads(timing.score_data) if timing else meal_timing.score(meal_timing.local_time(meal.date), inferred=True),
+                analysis=dict(score=analysis.get("score")) if analysis else None,
+                source_meal_id=detail.source_meal_id if detail else None))
+        return result
 
     def meal_signature(record):
         detail = db.session.get(Details, record.id)
@@ -237,22 +258,25 @@ def register_mobile_api(app, db, User, Meal):
             raise ValueError("Timezone offset is invalid")
         start = date - timedelta(minutes=offset)
         records = Meal.query.filter(Meal.user_id == profile.id, Meal.date >= start,
-                Meal.date < start + timedelta(days=1)).order_by(Meal.date.desc()).all()
-        return jsonify([serialize(record) for record in records])
+                Meal.date < start + timedelta(days=1)).order_by(Meal.date.desc())
+        return jsonify(summaries(records) if request.args.get("view") == "summary" else [serialize(record) for record in records.all()])
 
     @api.get("/history")
     def history():
         profile = user(request.args.get("user_id"))
         query = text(request.args.get("query", ""), 120)
         offset = int(request.args.get("offset", 0))
+        limit = int(request.args.get("limit", 30))
         if not 0 <= offset <= 100000:
             raise ValueError("History offset is invalid")
+        if not 1 <= limit <= 30:
+            raise ValueError("History limit must be between 1 and 30")
         records = Meal.query.filter(Meal.user_id == profile.id)
         if query:
             records = records.filter(Meal.description.contains(query, autoescape=True))
         total = records.count()
-        page = records.order_by(Meal.date.desc(), Meal.id.desc()).offset(offset).limit(30).all()
-        return jsonify(meals=[serialize(record) for record in page], total=total)
+        page = records.order_by(Meal.date.desc(), Meal.id.desc()).offset(offset).limit(limit)
+        return jsonify(meals=summaries(page) if request.args.get("view") == "summary" else [serialize(record) for record in page.all()], total=total)
 
     @api.get("/meals/<int:meal_id>")
     def get_meal(meal_id):

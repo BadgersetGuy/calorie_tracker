@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import gzip
 import json
 import os
 from pathlib import Path
@@ -69,6 +70,41 @@ class DeploymentSafetyTests(unittest.TestCase):
             with patch.dict(os.environ, DATABASE_URL="sqlite:////tmp/missing-meals.db"):
                 with self.assertRaises(RuntimeError):
                     guard.database_path(root)
+            with tempfile.TemporaryDirectory() as scratch:
+                original_backup = backup.read_bytes()
+                guard.compress_old_backup(manifest, Path(root) / "backups", Path(scratch), root)
+                archived = json.loads(manifest.read_text())
+                self.assertEqual(gzip.decompress(Path(archived["backup_path"]).read_bytes()), original_backup)
+                self.assertEqual(archived["compression"], "gzip")
+
+    def test_low_volume_space_keeps_a_verified_compressed_current_backup(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "meals.db"
+            with sqlite3.connect(path) as db:
+                db.executescript('''
+                    CREATE TABLE user (id INTEGER PRIMARY KEY, username TEXT,
+                        target_calories REAL, target_protein REAL, target_carbs REAL, target_fat REAL);
+                    CREATE TABLE meal (id INTEGER PRIMARY KEY, user_id INTEGER, date TEXT,
+                        weight REAL, calories REAL, protein REAL, carbs REAL, fat REAL,
+                        image_data TEXT, psoriasis_score REAL);
+                    INSERT INTO user VALUES (1, 'Private name', 2000, 100, 200, 60);
+                    INSERT INTO meal VALUES (1, 1, '2026-11-10', 200, 400, 20, 30, 10, '', 8);
+                ''')
+                db.execute("UPDATE meal SET image_data=?", ("A" * 150000,))
+            before = path.read_bytes()
+            def space(location):
+                free = 64 * 1024 * 1024 + 4096 if str(location) == root else 2 * 1024 * 1024 * 1024
+                return type("Space", (), {"free": free})()
+            with patch.dict(os.environ, DATABASE_URL="sqlite:///" + str(path)), patch.object(guard.shutil, "disk_usage", side_effect=space):
+                result = guard.backup(root)
+                reused = guard.backup(root)
+            self.assertEqual(reused, result)
+            self.assertEqual(result["compression"], "gzip")
+            archive = Path(result["backup_path"])
+            self.assertEqual(hashlib.sha256(gzip.decompress(archive.read_bytes())).hexdigest(), result["sha256"])
+            self.assertEqual(archive.stat().st_mode & 0o777, 0o600)
+            self.assertTrue(Path(result["manifest_path"]).is_file())
+            self.assertEqual(path.read_bytes(), before)
 
     def test_config_preserves_mounts_and_existing_environment(self):
         original = dict(app=deploy_fly.APP, processes={"web": "old"},

@@ -120,6 +120,88 @@ class MobileTests(unittest.TestCase):
         self.assertEqual(Meal.query.count(), 1)
         self.assertEqual(first.json["date"], "2026-11-09T10:00:00Z")
 
+    def test_summary_lists_skip_photos_fingerprints_and_full_ingredients(self):
+        image = io.BytesIO(); Image.new("RGB", (1800, 1200), "green").save(image, "JPEG")
+        encoded = base64.b64encode(image.getvalue()).decode()
+        saved = self.save(self.start(dict(image_data=encoded))).json
+        with patch("analysis_engine.fingerprint", side_effect=AssertionError("Summary must not hash photo payloads")):
+            response = self.client.get(f"/api/v2/history?user_id={self.a.id}&view=summary", headers=self.headers)
+            today = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-09&view=summary", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        item = response.json["meals"][0]
+        self.assertTrue(item["has_photo"])
+        self.assertNotIn("image_data", item)
+        self.assertNotIn("revision", item)
+        self.assertNotIn("ingredients", item["analysis"])
+        self.assertEqual(item["analysis"]["score"], saved["analysis"]["score"])
+        self.assertEqual(today.json[0]["calories"], saved["calories"])
+        self.assertLess(len(response.data), len(encoded) // 2)
+        detail = self.client.get(f"/api/v2/meals/{saved['id']}?include_images=false", headers=self.headers).json
+        self.assertIsNone(detail["image_data"])
+        self.assertIn("revision", detail)
+        self.assertEqual(detail["analysis"]["ingredients"], saved["analysis"]["ingredients"])
+
+    def test_photo_previews_are_small_and_do_not_rewrite_original(self):
+        image = io.BytesIO(); Image.new("RGB", (2400, 1600), "green").save(image, "JPEG")
+        encoded = base64.b64encode(image.getvalue()).decode()
+        old = Meal(user_id=self.a.id, date=datetime(2025, 1, 1), description="Photo", weight=100,
+            calories=100, protein=5, carbs=15, fat=2, image_data=encoded)
+        db.session.add(old); db.session.commit()
+        path = f"/api/v2/meals/{old.id}/photo"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        thumbnail = self.client.get(path + "?size=thumbnail", headers=self.headers)
+        self.assertEqual(thumbnail.status_code, 200)
+        self.assertLessEqual(max(Image.open(io.BytesIO(thumbnail.data)).size), 192)
+        preview = self.client.get(path + "?size=preview", headers=self.headers)
+        self.assertLessEqual(len(preview.data), 200 * 1024)
+        self.assertLessEqual(max(Image.open(io.BytesIO(preview.data)).size), 1280)
+        self.assertEqual(self.client.get(path, headers=self.headers).data, image.getvalue())
+        self.assertEqual(db.session.get(Meal, old.id).image_data, encoded)
+        self.assertEqual(self.client.get(path + "?size=invalid", headers=self.headers).status_code, 400)
+
+    def rpc(self, method, params=None):
+        return self.client.post("/mcp", headers=self.headers, json=dict(jsonrpc="2.0", id=1, method=method, params=params or {}))
+
+    def test_mcp_auth_handshake_discovery_and_read_call(self):
+        self.assertEqual(self.client.post("/mcp", json={}).status_code, 401)
+        with patch.dict(os.environ, MOBILE_API_TOKEN=""):
+            self.assertEqual(self.client.post("/mcp", json={}).status_code, 503)
+        init = self.rpc("initialize", dict(protocolVersion="2025-03-26"))
+        self.assertEqual(init.json["result"]["protocolVersion"], "2025-03-26")
+        tools = self.rpc("tools/list").json["result"]["tools"]
+        self.assertEqual(len(tools), 30)
+        self.assertEqual(len({t["name"] for t in tools}), 30)
+        self.assertNotIn('"$ref"', __import__('json').dumps(tools))
+        response = self.rpc("tools/call", dict(name="mobile_profiles", arguments={}))
+        payload = __import__('json').loads(response.json["result"]["content"][0]["text"])
+        self.assertEqual(payload["status"], 200)
+        self.assertEqual({p["username"] for p in payload["data"]}, {"Me", "Wife"})
+        blocked = self.client.post("/mcp", headers={**self.headers, "Origin": "https://evil.invalid"}, json={})
+        self.assertEqual(blocked.status_code, 403)
+
+    def test_mcp_writes_use_the_same_routes_and_validation(self):
+        response = self.rpc("tools/call", dict(name="mobile_create_profile", arguments=dict(body=dict(username="Test profile"))))
+        self.assertFalse(response.json["result"]["isError"])
+        self.assertIsNotNone(User.query.filter_by(username="Test profile").first())
+        invalid = self.rpc("tools/call", dict(name="mobile_create_profile", arguments=dict(body=dict(username="Other", secret="unexpected"))))
+        self.assertEqual(invalid.json["error"]["code"], -32602)
+        self.assertIsNone(User.query.filter_by(username="Other").first())
+        invalid = self.rpc("tools/call", dict(name="arbitrary_url", arguments=dict(url="https://evil.invalid")))
+        self.assertEqual(invalid.json["error"]["code"], -32602)
+
+    def test_mcp_notification_does_not_execute_a_write_and_photos_are_images(self):
+        notification = self.client.post("/mcp", headers=self.headers, json=dict(jsonrpc="2.0", method="tools/call", params=dict(name="mobile_create_profile", arguments=dict(body=dict(username="Not a request")))))
+        self.assertEqual(notification.status_code, 202)
+        self.assertIsNone(User.query.filter_by(username="Not a request").first())
+        image = io.BytesIO(); Image.new("RGB", (100, 100), "green").save(image, "JPEG")
+        saved = self.save(self.start(dict(image_data=base64.b64encode(image.getvalue()).decode()))).json
+        tools = self.rpc("tools/list").json["result"]["tools"]
+        photo_tool = next(t["name"] for t in tools if "photo" in t["name"] and "draft" not in t["name"])
+        response = self.rpc("tools/call", dict(name=photo_tool, arguments=dict(path=dict(meal_id=saved["id"]))))
+        content = response.json["result"]["content"][0]
+        self.assertEqual(content["type"], "image")
+        self.assertEqual(content["mimeType"], "image/jpeg")
+
     def edit_items(self, draft, items, revision=None):
         return self.client.put(f"/api/v2/analyses/{draft['id']}/ingredients", headers=self.headers,
             json=dict(revision=draft["revision"] if revision is None else revision, items=items))

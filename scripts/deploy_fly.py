@@ -159,7 +159,7 @@ def main():
                 except Exception: pass
                 time.sleep(2)
             else: raise RuntimeError("Public health did not confirm the deployed revision")
-            verification = remote(after["id"], "verify", backup["backup_path"].rsplit(".", 1)[0] + ".json", str(port))
+            verification = remote(after["id"], "verify", backup.get("manifest_path") or backup["backup_path"].rsplit(".", 1)[0] + ".json", str(port))
             if not verification.get("records_preserved"): raise RuntimeError("Record preservation was not confirmed")
         except Exception:
             print("Deployment verification failed; restoring the previous application image without restoring/overwriting data", flush=True)

@@ -17,6 +17,7 @@ jobs:
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       MOBILE_API_TOKEN: ${{ secrets.MOBILE_API_TOKEN }}
+      MEAL_API_URL: https://calorie-tracker-billowing-rain-2129.fly.dev
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,6 +26,10 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
         with:
           version: '0.5.6'
-      - run: pip install tomli-w==1.2.0
+      - run: pip install tomli-w==1.2.0 mcp==2.3.0
       - name: Back up, deploy, and verify without publishing private data
         run: python scripts/deploy_fly.py
+      - name: Verify the live MCP connection with the official client
+        run: python scripts/check_mcp.py
+      - name: Measure compact lists and sized photos without logging household data
+        run: python scripts/benchmark_api.py

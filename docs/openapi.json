@@ -229,6 +229,18 @@
             }
           },
           {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "full",
+                "summary"
+              ]
+            },
+            "description": "Summary returns lightweight list metadata and scores, without photos, ingredient details or edit revisions. Fetch the meal before editing it."
+          },
+          {
             "name": "include_images",
             "in": "query",
             "schema": {
@@ -431,11 +443,30 @@
             }
           },
           {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
             "name": "query",
             "in": "query",
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "full",
+                "summary"
+              ]
+            },
+            "description": "Summary returns lightweight list metadata and scores, without photos, ingredient details or edit revisions. Fetch the meal before editing it."
           },
           {
             "name": "include_images",
@@ -1494,6 +1525,19 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "original",
+                "thumbnail",
+                "preview"
+              ]
+            },
+            "description": "Thumbnail is at most 192 pixels; preview uses the current 1280-pixel/200-KiB policy. The stored original is not modified."
           }
         ]
       }

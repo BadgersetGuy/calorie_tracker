@@ -12,6 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install PyYAML==6.0.3
+      - run: python scripts/package_plugin.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -31,10 +36,13 @@ jobs:
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk everyday-meals-debug.apk
           sha256sum everyday-meals-debug.apk > everyday-meals-debug.apk.sha256
+          cp dist/everyday-meals-plugin.zip everyday-meals-plugin.zip
           cat > release-notes.md <<'NOTES'
           Installable Android test build of Everyday Meals. Download everyday-meals-debug.apk directly on your Android phone. No GitHub login is required.
 
-          Version 2.0.1 adds direct item quantity/removal controls and an Add item action, alongside text corrections. Existing analysed meals can be edited without rerunning detection.
+          Version 2.0.2 loads compact meal lists and small photos separately, caches recent screens and avoids network requests when opening Add meal. Includes item quantity/removal controls, Add item and text corrections.
+
+          everyday-meals-plugin.zip is the private chat connector package. It contains no credentials. Connect it to the deployed /mcp endpoint using API-key/Bearer authentication and your household token in the host connection settings. Downloading the package alone does not install or authenticate the plugin.
 
           This is a debug-signed evaluation build. Android may ask you to allow installation from your browser. No household token or OpenAI key is embedded in the app. Enter the HTTPS server address and household token to connect. If a previous test APK has an incompatible signature, uninstall that test app first; meals remain on the server. Keep your household token privately so you can reconnect.
           NOTES
@@ -46,8 +54,8 @@ jobs:
           enter the server address and household token again after installing.
           INSTALL
           (cd /tmp && zip -q "$GITHUB_WORKSPACE/everyday-meals-android.zip" everyday-meals-debug.apk everyday-meals-debug.apk.sha256 INSTALL.txt)
-          if ! gh release view android-test-2026-11-10-items >/dev/null 2>&1; then
-            gh release create android-test-2026-11-10-items --target "$GITHUB_SHA" --title 'Everyday Meals — Android test build' --notes-file release-notes.md --draft --prerelease
+          if ! gh release view android-test-2026-11-10-fast >/dev/null 2>&1; then
+            gh release create android-test-2026-11-10-fast --target "$GITHUB_SHA" --title 'Everyday Meals — Android test build' --notes-file release-notes.md --draft --prerelease
           fi
-          gh release upload android-test-2026-11-10-items everyday-meals-debug.apk everyday-meals-debug.apk.sha256 everyday-meals-android.zip --clobber
-          gh release edit android-test-2026-11-10-items --draft=false --prerelease --notes-file release-notes.md
+          gh release upload android-test-2026-11-10-fast everyday-meals-debug.apk everyday-meals-debug.apk.sha256 everyday-meals-android.zip everyday-meals-plugin.zip --clobber
+          gh release edit android-test-2026-11-10-fast --draft=false --prerelease --notes-file release-notes.md

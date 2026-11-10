@@ -87,7 +87,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (vm.busy || vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             vm.error?.let { message ->
                 Card(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -169,7 +169,7 @@ fun MealList(vm: MealViewModel, onTargets: () -> Unit) {
             }, enabled = !vm.busy) { Icon(Icons.Outlined.CalendarMonth, null); Spacer(Modifier.width(8.dp)); Text("Choose date") }
             IconButton(onClick = { vm.setHistory(vm.historyDate.plusDays(1)) }, enabled = !vm.busy) { Icon(Icons.Outlined.ChevronRight, "Next day") }
         } }
-        if (!history || !vm.historyAll) item {
+        if ((!history || !vm.historyAll) && (!vm.loading || vm.meals.isNotEmpty())) item {
             val totals = JSONObject()
             listOf("calories", "protein", "carbs", "fat").forEach { n -> totals.put(n, vm.meals.sumOf { it.optDouble(n) }) }
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -187,12 +187,13 @@ fun MealList(vm: MealViewModel, onTargets: () -> Unit) {
                 }
             }
         }
-        if (vm.meals.isEmpty() && !vm.busy) item { EmptyState("Nothing logged yet", if (history) "Choose another day to find and reuse a past meal." else "Your first meal can be a photo, a sentence, or something you've eaten before.", if (history) "Go to today" else "Add a meal") { vm.navigate(if (history) 0 else 1) } }
+        if (vm.meals.isEmpty() && vm.loading) item { CircularProgressIndicator(Modifier.padding(24.dp)) }
+        if (vm.meals.isEmpty() && !vm.busy && !vm.loading) item { EmptyState("Nothing logged yet", if (history) "Choose another day to find and reuse a past meal." else "Your first meal can be a photo, a sentence, or something you've eaten before.", if (history) "Go to today" else "Add a meal") { vm.navigate(if (history) 0 else 1) } }
         items(vm.meals, key = { it.getInt("id") }) { meal ->
-            Card(Modifier.fillMaxWidth().clickable(enabled = !vm.busy) { vm.mealDetail = meal }, shape = RoundedCornerShape(16.dp)) {
+            Card(Modifier.fillMaxWidth().clickable(enabled = !vm.busy) { vm.openMeal(meal) }, shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        MealPhoto(meal.optString("image_data"), Modifier.size(64.dp))
+                        RemoteMealPhoto(vm, meal.getInt("id"), meal.optBoolean("has_photo"), Modifier.size(64.dp))
                         Column(Modifier.weight(1f)) {
                             Text(meal.optString("description"), style = MaterialTheme.typography.titleMedium, maxLines = 2)
                             Text("${meal.number("calories")} kcal · ${meal.number("weight")} g", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -227,12 +228,28 @@ fun MacroRow(values: JSONObject) {
 
 @Composable
 fun MealPhoto(base64: String?, modifier: Modifier) {
-    val bitmap = remember(base64) { base64?.takeIf { it.isNotBlank() && it != "null" }?.let { runCatching {
-        val bytes = Base64.decode(it, Base64.DEFAULT)
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-    }.getOrNull() } }
-    if (bitmap != null) Image(bitmap, "Meal photo", modifier, contentScale = ContentScale.Crop)
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, base64) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            base64?.takeIf { it.isNotBlank() && it != "null" }?.let { runCatching {
+                val bytes = Base64.decode(it, Base64.DEFAULT)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                val options = BitmapFactory.Options().apply { inSampleSize = 1; while (maxOf(bounds.outWidth, bounds.outHeight) / inSampleSize > 2560) inSampleSize *= 2 }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+            }.getOrNull() }
+        }
+    }
+    if (bitmap != null) Image(bitmap!!, "Meal photo", modifier, contentScale = ContentScale.Crop)
     else Icon(Icons.Outlined.Restaurant, "Text meal", modifier.padding(12.dp), tint = MaterialTheme.colorScheme.primary)
+}
+
+@Composable
+fun RemoteMealPhoto(vm: MealViewModel, mealId: Int, hasPhoto: Boolean, modifier: Modifier, preview: Boolean = false) {
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, vm.server, mealId, hasPhoto, preview, vm.photoEpoch, vm.tab, vm.profileId) {
+        value = if (hasPhoto) runCatching { vm.mealPhoto(mealId, preview)?.asImageBitmap() }.getOrNull() else null
+    }
+    if (bitmap != null) Image(bitmap!!, "Meal photo", modifier, contentScale = ContentScale.Crop)
+    else Icon(Icons.Outlined.Restaurant, if (hasPhoto) "Meal photo loading" else "Text meal", modifier.padding(12.dp), tint = MaterialTheme.colorScheme.primary)
 }
 
 @Composable
@@ -469,7 +486,9 @@ fun MealDialog(vm: MealViewModel, meal: JSONObject) {
     var delete by remember { mutableStateOf(false) }
     AlertDialog(onDismissRequest = { if (!vm.busy) vm.mealDetail = null }, title = { Text("Meal details") }, text = {
         LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            item { MealPhoto(meal.optString("image_data"), Modifier.fillMaxWidth().height(170.dp)) }
+            if (vm.mealDetailLoading) item { CircularProgressIndicator(); Text("Loading meal…") }
+            else {
+            item { RemoteMealPhoto(vm, meal.getInt("id"), meal.optBoolean("has_photo"), Modifier.fillMaxWidth().height(170.dp), preview = true) }
             meal.optJSONObject("discipline")?.let { timing -> item {
                 Text("Discipline ${timing.getInt("value")}/10", style = MaterialTheme.typography.titleMedium)
                 Text("${timing.optString("local_eaten_at")} · ${timing.optString("timezone")}", style = MaterialTheme.typography.bodySmall)
@@ -489,6 +508,7 @@ fun MealDialog(vm: MealViewModel, meal: JSONObject) {
             }
             item { OutlinedButton(onClick = { vm.reanalyze(meal) }, enabled = !vm.busy) { Text("Correct / reanalyse meal") } }
             item { TextButton(onClick = { delete = true }, enabled = !vm.busy) { Text("Delete meal", color = MaterialTheme.colorScheme.error) } }
+            }
         }
     }, confirmButton = { TextButton(onClick = { vm.openCopy(meal) }, enabled = !vm.busy) { Text("Log again / copy") } }, dismissButton = { TextButton(onClick = { vm.mealDetail = null }, enabled = !vm.busy) { Text("Close") } })
     if (delete) AlertDialog(onDismissRequest = { delete = false }, title = { Text("Delete this meal?") }, text = { Text("This removes it from the selected profile's history.") },

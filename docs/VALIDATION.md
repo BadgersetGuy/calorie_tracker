@@ -2,11 +2,11 @@
 
 Updated 10 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 74 tests passed, temporary SQLite database, including private backup and deployment configuration guards, detached private checks, separate-token requirements, item editing, removal and reuse without another model call.
+- `python -m unittest discover -s tests -q`: 80 tests passed, temporary SQLite database, including compact lists without photo hashing, sized photo preservation, MCP authentication/discovery/validation/writes, and lossless compressed backup verification.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
-- APK metadata: `com.badgerset.meals`, version `2.0.1`, minimum Android API 26,
+- APK metadata: `com.badgerset.meals`, version `2.0.2`, minimum Android API 26,
   target API 35. Debug signing is for testing, not a Play Store release.
 
 Tests include clarification context, stale draft revisions, replacing a saved meal,

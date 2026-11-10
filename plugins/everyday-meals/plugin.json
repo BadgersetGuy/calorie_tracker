@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "everyday-meals",
+  "version": "1.0.0",
+  "description": "Control the private household meal diary from chat.",
+  "author": {"name": "BadgersetGuy"},
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Everyday Meals",
+        "shortDescription": "Your household meal diary",
+        "longDescription": "Log, clarify, edit and copy meals for either household profile. Read calorie/macronutrient totals, meal timing, dietary-pattern scores, history and body weight; find rotating meal ideas. Connect to the existing Fly backend with the separate household token.",
+        "developerName": "BadgersetGuy",
+        "category": "Productivity",
+        "logo": "assets/icon.svg",
+        "composerIcon": "assets/icon.svg",
+        "defaultPrompt": ["Show my daily nutrition totals.", "Log a meal for my wife.", "Copy a past meal with a smaller portion."]
+      }
+    }
+  }
+}

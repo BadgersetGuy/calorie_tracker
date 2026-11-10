@@ -13,6 +13,7 @@ from sqlalchemy import event
 import analysis_engine as engine
 import meal_timing
 from photo_inputs import photo_from_request
+from media_previews import photo_bytes
 
 
 def register_record_routes(api, db, User, Meal, Details, Draft, Timing, services):
@@ -180,7 +181,7 @@ def register_record_routes(api, db, User, Meal, Details, Draft, Timing, services
         record = db.session.get(Meal, meal_id)
         if not record or not record.image_data:
             return jsonify(error="No photo is stored for this meal"), 404
-        return Response(base64.b64decode(record.image_data), mimetype="image/jpeg",
+        return Response(photo_bytes(record.image_data, request.args.get("size", "original")), mimetype="image/jpeg",
             headers={"Cache-Control": "private, no-store"})
 
     @api.patch("/profiles/<int:profile_id>")

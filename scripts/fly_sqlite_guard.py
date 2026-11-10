@@ -2,6 +2,7 @@
 import base64
 from datetime import datetime, timezone
 import hashlib
+import gzip
 import io
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import sys
+import tempfile
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import uuid
@@ -64,11 +66,65 @@ def logical_digest(path):
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""): checksum.update(chunk)
     return checksum.hexdigest()
 
+def schema_digest(path):
+    with sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=30) as connection:
+        rows = connection.execute("SELECT name, type, sql FROM sqlite_master ORDER BY name").fetchall()
+    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+
+def gzip_digest(path):
+    checksum = hashlib.sha256()
+    with gzip.open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""): checksum.update(chunk)
+    return checksum.hexdigest()
+
+def gzip_copy(source, target):
+    with open(source, "rb") as incoming, gzip.open(target, "wb", compresslevel=3) as outgoing:
+        shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+    os.chmod(target, 0o600)
+
+def write_manifest(path, data):
+    temporary = Path(str(path) + ".tmp")
+    temporary.write_text(json.dumps(data)); temporary.chmod(0o600)
+    os.replace(temporary, path)
+
+def compress_old_backup(manifest, folder, scratch, root):
+    saved = json.loads(manifest.read_text())
+    original = Path(saved["backup_path"])
+    if (saved.get("compression") or original.resolve().parent != folder.resolve()
+            or not original.is_file() or file_digest(original) != saved["sha256"]): return
+    compressed = scratch / (original.name + ".gz")
+    gzip_copy(original, compressed)
+    if gzip_digest(compressed) != saved["sha256"]:
+        raise RuntimeError("Compressed backup verification failed")
+    target = folder / compressed.name
+    if shutil.disk_usage(root).free + original.stat().st_size < compressed.stat().st_size + 64 * 1024 * 1024:
+        raise RuntimeError("Not enough volume space to retain the compressed backup")
+    removed = False
+    try:
+        # A verified copy is retained in scratch and other restore points stay on the
+        # volume. Recover the original if the final copy cannot be completed.
+        original.unlink(); removed = True
+        shutil.copyfile(compressed, target); target.chmod(0o600)
+        if file_digest(target) != file_digest(compressed):
+            raise RuntimeError("Stored compressed backup verification failed")
+        saved.update(backup_path=str(target), compression="gzip", archive_sha256=file_digest(target))
+        write_manifest(manifest, saved)
+    except Exception:
+        target.unlink(missing_ok=True)
+        if removed:
+            with gzip.open(compressed, "rb") as incoming, original.open("wb") as outgoing:
+                shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+            original.chmod(0o600)
+        raise
+    finally:
+        compressed.unlink(missing_ok=True)
+
 def backup(root="/data"):
     path = database_path(root)
     folder = Path(root) / "backups"
     folder.mkdir(mode=0o700, exist_ok=True)
     inspect_database(path)
+    current_schema = schema_digest(path)
     # Retries before rollout may already have a byte-verified, identical logical copy.
     # SQLite's backup API changes header counters, so compare all schema/data as well.
     source_digest = None
@@ -77,9 +133,16 @@ def backup(root="/data"):
             saved = json.loads(manifest.read_text())
             previous = Path(saved["backup_path"])
             if (saved["source_path"] != str(path) or saved.get("integrity") != "ok"
-                    or previous.resolve().parent != folder.resolve() or not previous.is_file()
-                    or file_digest(previous) != saved["sha256"]):
+                    or previous.resolve().parent != folder.resolve() or not previous.is_file()):
                 continue
+            if saved.get("compression") == "gzip":
+                if saved.get("schema_digest") != current_schema or not saved.get("logical_digest"):
+                    continue
+                if file_digest(previous) != saved["archive_sha256"]: continue
+                if source_digest is None: source_digest = logical_digest(path)
+                if source_digest == saved["logical_digest"]: return saved
+                continue
+            if schema_digest(previous) != current_schema or file_digest(previous) != saved["sha256"]: continue
             if source_digest is None: source_digest = logical_digest(path)
             if logical_digest(previous) == source_digest:
                 inspect_database(previous)
@@ -88,7 +151,7 @@ def backup(root="/data"):
             continue
     size = path.stat().st_size
     if shutil.disk_usage(root).free < size + 64 * 1024 * 1024:
-        raise RuntimeError("Not enough free space for a verified local database backup")
+        return compressed_backup(path, folder, root, size)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     target = folder / ("before-android-" + stamp + ".db")
     with sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=30) as source:
@@ -97,10 +160,45 @@ def backup(root="/data"):
     os.chmod(target, 0o600)
     counts = inspect_database(target)
     result = dict(backup_path=str(target), sha256=file_digest(target), counts=counts,
-                  source_path=str(path), integrity="ok")
+                  source_path=str(path), integrity="ok", schema_digest=schema_digest(target))
     manifest = target.with_suffix(".json")
     manifest.write_text(json.dumps(result)); os.chmod(manifest, 0o600)
     return result
+
+def compressed_backup(path, folder, root, size):
+    if shutil.disk_usage(tempfile.gettempdir()).free < size * 3 + 64 * 1024 * 1024:
+        raise RuntimeError("Not enough private staging space for a verified backup")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    name = "before-android-" + stamp
+    with tempfile.TemporaryDirectory(prefix="meal-backup-") as temporary:
+        scratch = Path(temporary)
+        staged = scratch / (name + ".db")
+        with sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=30) as source, sqlite3.connect(staged) as destination:
+            source.backup(destination, pages=128, sleep=.05)
+        staged.chmod(0o600)
+        counts = inspect_database(staged)
+        checksum = file_digest(staged)
+        digest = logical_digest(staged)
+        archive = scratch / (name + ".db.gz")
+        gzip_copy(staged, archive)
+        if gzip_digest(archive) != checksum: raise RuntimeError("Fresh compressed backup failed verification")
+        required = archive.stat().st_size + 64 * 1024 * 1024
+        if shutil.disk_usage(root).free < required:
+            for manifest in sorted(folder.glob("before-android-*.json")):
+                compress_old_backup(manifest, folder, scratch, root)
+                if shutil.disk_usage(root).free >= required: break
+        if shutil.disk_usage(root).free < required:
+            raise RuntimeError("Volume remains too full after lossless backup compression")
+        target = folder / archive.name
+        shutil.copyfile(archive, target); target.chmod(0o600)
+        archive_hash = file_digest(archive)
+        if file_digest(target) != archive_hash: raise RuntimeError("Stored backup failed verification")
+        manifest = folder / (name + ".json")
+        result = dict(backup_path=str(target), manifest_path=str(manifest), source_path=str(path),
+            sha256=checksum, compression="gzip", archive_sha256=archive_hash, logical_digest=digest,
+            schema_digest=schema_digest(staged), counts=counts, integrity="ok")
+        write_manifest(manifest, result)
+        return result
 
 def choose_model():
     key = os.getenv("OPENAI_API_KEY")

@@ -1,9 +1,20 @@
 # Android and chat share one REST API
 
-REST is the source of truth. No MCP server is required for the Android app, a private
-Custom GPT Action, or a Codex skill that can make HTTP requests. A general ChatGPT plugin
-would still need a thin MCP adapter; a skill supplies instructions, not transport or
-credentials. No ChatGPT connection, GPT, or MCP server has been created in your account.
+REST is the source of truth. Android, Custom GPT Actions and HTTP-capable skills can use
+it directly. The authenticated `/mcp` endpoint is a stateless Streamable HTTP adapter
+over the same 30 operations; it does not create a separate diary. It supports MCP
+2025-03-26, JSON responses, tool discovery/calls and API-key/Bearer authentication.
+The official MCP 2.3.0 client verifies handshake, discovery and a read-only profile call.
+
+The private portable plugin is in `plugins/everyday-meals/`; build its credential-free
+ZIP using `python scripts/package_plugin.py`. Configure API-key authentication with the
+Bearer scheme and the household token in the host's private connection settings.
+The endpoint is `https://calorie-tracker-billowing-rain-2129.fly.dev/mcp`. Downloading a
+package, deploying the adapter or adding a skill does not install a connection into
+ChatGPT. Verify that actual meal tools appear and a profile lookup succeeds before
+claiming chat access. If the host lacks plugin installation/account-save capabilities,
+the connection remains pending; use a supported private-plugin flow or the Custom GPT
+Action setup below.
 
 Use a separate household token, not the Fly deployment credential. Configure the same
 random value (at least 32 characters) as the GitHub repository Actions secret
@@ -22,6 +33,16 @@ using `replace_meal_id` to update it in place. Older meals without item details 
 analysis first.
 
 ## Connection options
+
+### Same-chat MCP plugin
+
+Install/connect the private Everyday Meals plugin using the host's supported plugin
+workflow. Enter the household token through its secure API-key/Bearer connection form,
+never in chat. The plugin contains workflow instructions and all REST-backed tools.
+Only a successful connection and live tool call establish account access. Tool writes
+use the same validation, profile selection, revisions and idempotency as Android.
+For actual photo uploads, the host must provide image bytes or supported attachment
+metadata; the plugin must not fabricate it or claim an absent photo was saved.
 
 ### Private Custom GPT
 

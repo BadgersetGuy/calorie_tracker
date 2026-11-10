@@ -457,6 +457,8 @@ def user_targets(user_id):
 
 from mobile_api import register_mobile_api
 MobileMealDetails = register_mobile_api(app, db, User, Meal)
+from mcp_bridge import register_mcp
+register_mcp(app)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))

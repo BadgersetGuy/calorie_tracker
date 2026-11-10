@@ -2,6 +2,7 @@ package com.badgerset.meals
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
@@ -11,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -53,6 +56,19 @@ private class TokenVault {
 }
 
 class MealViewModel(application: Application) : AndroidViewModel(application) {
+    private data class MealPage(val meals: List<JSONObject>, val total: Int, val loadedAt: Long)
+    private data class PhotoEntry(val bitmap: Bitmap, val loadedAt: Long)
+    private val pages = mutableMapOf<String, MealPage>()
+    private val ideaPages = mutableMapOf<Int, Pair<JSONObject, Long>>()
+    private val photos = object : android.util.LruCache<String, PhotoEntry>(8192) {
+        override fun sizeOf(key: String, value: PhotoEntry) = (value.bitmap.byteCount / 1024).coerceAtLeast(1)
+    }
+    private var readJob: Job? = null
+    private var readGeneration = 0
+    var loading by mutableStateOf(false)
+    var mealDetailLoading by mutableStateOf(false)
+    var photoEpoch by mutableIntStateOf(0)
+        private set
     private val prefs = application.getSharedPreferences("meals", 0)
     private val vault = TokenVault()
     var server by mutableStateOf(prefs.getString("server", "https://calorie-tracker-billowing-rain-2129.fly.dev")!!)
@@ -107,7 +123,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
             connection.readTimeout = 120000
             connection.setRequestProperty("Authorization", "Bearer " + token.trim())
             connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("X-Meal-Client", "android")
+            connection.setRequestProperty("X-Meal-Client", "android-v2")
             if (data != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
@@ -125,6 +141,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun work(block: suspend () -> Unit) {
         if (busy) return
+        readJob?.cancel(); readGeneration++; loading = false
         busy = true; error = null; notice = null
         viewModelScope.launch {
             try { block() } catch (e: Exception) { error = e.message ?: "Could not connect. Please try again." }
@@ -138,6 +155,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         val loaded = JSONArray(api("/profiles")).objects()
         prefs.edit().putString("server", server.trim().trimEnd('/')).putString("token", vault.encrypt(token.trim())).apply()
         profiles = loaded
+        pages.clear(); ideaPages.clear(); clearPhotos()
         if (profiles.none { it.getInt("id") == profileId }) profileId = profiles.firstOrNull()?.getInt("id") ?: 0
         connected = true
         if (profileId > 0) loadMeals()
@@ -149,30 +167,68 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun pageKey() = "$profileId:$tab:$historyAll:$activeDate:$historySearch"
+    private fun invalidateMeals() { pages.clear(); ideaPages.clear() }
+    private fun clearPhotos() { photos.evictAll(); photoEpoch++ }
+    private fun storePage(key: String, page: MealPage) {
+        pages[key] = page
+        while (pages.size > 16) pages.remove(pages.keys.first())
+    }
     private suspend fun loadMeals() {
         if (profileId == 0) { meals = emptyList(); return }
-        if (tab == 3) { loadIdeas(); return }
+        if (tab == 1) return
+        if (tab == 3) { loadIdeas(); ideaPages[profileId] = ideas!! to System.currentTimeMillis(); return }
+        val key = pageKey()
         if (tab == 2 && historyAll) {
             val query = java.net.URLEncoder.encode(historySearch, "UTF-8")
-            val response = JSONObject(api("/history?user_id=$profileId&query=$query"))
-            meals = response.getJSONArray("meals").objects()
-            historyTotal = response.getInt("total")
+            val response = JSONObject(api("/history?user_id=$profileId&query=$query&view=summary"))
+            val page = MealPage(response.getJSONArray("meals").objects(), response.getInt("total"), System.currentTimeMillis())
+            storePage(key, page)
+            if (key == pageKey()) { meals = page.meals; historyTotal = page.total }
             return
         }
         val offset = activeDate.atStartOfDay(ZoneId.systemDefault()).offset.totalSeconds / 60
-        meals = JSONArray(api("/meals?user_id=$profileId&date=$activeDate&offset_minutes=$offset")).objects()
+        val result = JSONArray(api("/meals?user_id=$profileId&date=$activeDate&offset_minutes=$offset&view=summary")).objects()
+        storePage(key, MealPage(result, result.size, System.currentTimeMillis()))
+        if (key == pageKey()) meals = result
     }
-    fun refresh() = work { loadMeals() }
+    fun refresh() = refreshMeals(true)
+    private fun refreshMeals(force: Boolean) {
+        if (busy || profileId == 0 || tab == 1) return
+        readJob?.cancel(); loading = false
+        val generation = ++readGeneration
+        val key = pageKey()
+        val cached = pages[key]
+        if (tab == 3) {
+            val stored = ideaPages[profileId]
+            ideas = stored?.first
+            avoidIngredients = stored?.first?.optJSONArray("avoid")?.strings()?.joinToString(", ") ?: prefs.getString("avoid-$profileId", "")!!
+            if (!force && stored != null && System.currentTimeMillis() - stored.second < 30000) return
+        } else {
+            meals = cached?.meals ?: emptyList()
+            historyTotal = cached?.total ?: 0
+            if (!force && cached != null && System.currentTimeMillis() - cached.loadedAt < 30000) return
+        }
+        loading = true; error = null
+        if (force) clearPhotos()
+        readJob = viewModelScope.launch {
+            try { loadMeals() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (generation == readGeneration) error = e.message ?: "Could not refresh meals" }
+            finally { if (generation == readGeneration) loading = false }
+        }
+    }
     fun navigate(value: Int) { if (!busy) {
         if (value == 1 && draft == null && description.isBlank() && photoUri == null && !prefs.contains("eatenAt")) {
             eatenAt = OffsetDateTime.now(); eatingTimezone = ZoneId.systemDefault().id
         }
-        tab = value; refresh()
+        readJob?.cancel(); loading = false
+        tab = value; refreshMeals(false)
     } }
     fun selectProfile(id: Int) {
         if (busy || draft != null || editSource != 0) { error = "Save or discard your current analysis before switching profiles."; return }
         profileId = id; ideas = null; meals = emptyList(); weightRecords = emptyList()
-        prefs.edit().putInt("profile", id).apply(); refresh()
+        prefs.edit().putInt("profile", id).apply(); refreshMeals(false)
     }
     fun createProfile(name: String) = work {
         require(draft == null && editSource == 0) { "Save or discard the current analysis before creating a profile." }
@@ -183,9 +239,38 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     fun showAllHistory() { if (!busy) { historyAll = true; refresh() } }
     fun moreHistory() = work {
         val query = java.net.URLEncoder.encode(historySearch, "UTF-8")
-        val response = JSONObject(api("/history?user_id=$profileId&query=$query&offset=${meals.size}"))
+        val response = JSONObject(api("/history?user_id=$profileId&query=$query&offset=${meals.size}&view=summary"))
         meals = (meals + response.getJSONArray("meals").objects()).distinctBy { it.getInt("id") }
         historyTotal = response.getInt("total")
+        storePage(pageKey(), MealPage(meals, historyTotal, System.currentTimeMillis()))
+    }
+    fun openMeal(meal: JSONObject) = work {
+        mealDetailLoading = true; mealDetail = meal
+        try { mealDetail = JSONObject(api("/meals/${meal.getInt("id")}?include_images=false")) }
+        catch (e: Exception) { mealDetail = null; throw e }
+        finally { mealDetailLoading = false }
+    }
+    suspend fun mealPhoto(id: Int, preview: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
+        val origin = server.trim().trimEnd('/')
+        val credential = token.trim()
+        val key = "$origin:$id:$preview"
+        photos.get(key)?.let { if (System.currentTimeMillis() - it.loadedAt < 300000) return@withContext it.bitmap }
+        val url = URL("$origin/api/v2/meals/$id/photo?size=${if (preview) "preview" else "thumbnail"}")
+        require(url.protocol == "https" && url.userInfo == null)
+        val connection = url.openConnection() as HttpURLConnection
+        try {
+            connection.instanceFollowRedirects = false; connection.connectTimeout = 15000; connection.readTimeout = 30000
+            connection.setRequestProperty("Authorization", "Bearer $credential")
+            if (connection.responseCode != 200) return@withContext null
+            val bytes = connection.inputStream.use { it.readBytes() }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            val limit = if (preview) 1280 else 192
+            val options = BitmapFactory.Options().apply { inSampleSize = 1; while (maxOf(bounds.outWidth, bounds.outHeight) / inSampleSize > limit * 2) inSampleSize *= 2 }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return@withContext null
+            if (credential == token.trim() && origin == server.trim().trimEnd('/')) photos.put(key, PhotoEntry(bitmap, System.currentTimeMillis()))
+            bitmap
+        } finally { connection.disconnect() }
     }
     fun saveTargets(values: JSONObject) = work {
         api("/profiles/$profileId/targets", "PUT", values)
@@ -306,6 +391,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         val data = JSONObject().put("revision", current.getInt("revision")).put("eaten_at", eatenAt.toString()).put("timezone", eatingTimezone)
         if (editSource > 0) data.put("replace_meal_id", editSource)
         api("/analyses/${current.getString("id")}/save", "POST", data)
+        invalidateMeals(); if (editSource > 0) clearPhotos()
         resetEntry(); tab = 0; loadMeals(); notice = "Meal saved"
     }
     fun resetEntry() {
@@ -342,10 +428,10 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
             .put("timezone", ZoneId.systemDefault().id)
             .put("request_key", copyKey)
         api("/meals/${meal.getInt("id")}/copy", "POST", data)
-        copyMeal = null; mealDetail = null; loadMeals(); notice = "Meal copied"
+        invalidateMeals(); copyMeal = null; mealDetail = null; loadMeals(); notice = "Meal copied"
     }
     fun deleteMeal(meal: JSONObject) = work {
-        api("/meals/${meal.getInt("id")}", "DELETE"); mealDetail = null; loadMeals(); notice = "Meal deleted"
+        api("/meals/${meal.getInt("id")}", "DELETE"); invalidateMeals(); clearPhotos(); mealDetail = null; loadMeals(); notice = "Meal deleted"
     }
     fun setEatingTime(date: LocalDate, time: java.time.LocalTime) {
         eatenAt = date.atTime(time).atZone(ZoneId.of(eatingTimezone)).toOffsetDateTime(); persistEntry()
@@ -384,6 +470,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     fun disconnect() {
         if (busy) return
         connected = false; token = ""; profiles = emptyList(); meals = emptyList(); weightRecords = emptyList(); mealDetail = null; ideas = null
+        readJob?.cancel(); loading = false; pages.clear(); ideaPages.clear(); clearPhotos()
         resetEntry(); prefs.edit().remove("token").remove("profile").apply()
     }
 }
