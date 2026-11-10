@@ -14,6 +14,13 @@ from scripts import deploy_fly, fly_sqlite_guard as guard
 
 
 class DeploymentSafetyTests(unittest.TestCase):
+    def test_rollout_requires_a_distinct_household_secret_before_fly_operations(self):
+        for household in ("", "short", "deployment-secret-" * 3):
+            with patch.dict(os.environ, FLY_API_TOKEN="deployment-secret-" * 3, MOBILE_API_TOKEN=household), patch.object(deploy_fly, "run") as fly:
+                with self.assertRaises(RuntimeError):
+                    deploy_fly.main()
+                fly.assert_not_called()
+
     def test_remote_check_survives_a_detached_command_and_returns_private_result(self):
         with tempfile.TemporaryDirectory() as folder:
             scripts = Path(folder) / "scripts"
@@ -22,7 +29,7 @@ class DeploymentSafetyTests(unittest.TestCase):
             def execute_locally(args, **kwargs):
                 process = subprocess.run(shlex.split(args[3]), text=True, capture_output=True, timeout=5)
                 return json.dumps(dict(exit_code=process.returncode, stdout=process.stdout))
-            with patch.object(deploy_fly, "ROOT", Path(folder)), patch.object(deploy_fly, "run", side_effect=execute_locally), patch.object(deploy_fly.time, "sleep"):
+            with patch.object(deploy_fly, "ROOT", Path(folder)), patch.object(deploy_fly, "run", side_effect=execute_locally), patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", side_effect=OSError):
                 self.assertEqual(deploy_fly.remote("local-machine", "test"), {"integrity": "ok"})
 
     def test_online_backup_preserves_records_and_is_private(self):

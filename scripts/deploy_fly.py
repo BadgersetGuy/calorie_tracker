@@ -42,6 +42,12 @@ def primary(items):
     return machine, selected[0]["volume"]
 
 def remote(machine_id, *args):
+    def keep_awake():
+        # Exec activity does not count as HTTP traffic for Fly's idle auto-stop.
+        try:
+            with urlopen(ORIGIN + "/", timeout=10): pass
+        except Exception: pass
+    keep_awake()
     source = (ROOT / "scripts/fly_sqlite_guard.py").read_bytes()
     expression = "exec(__import__('base64').b64decode('" + base64.b64encode(source).decode() + "'))"
     result_path = "/tmp/meal-deploy-" + uuid.uuid4().hex + ".json"
@@ -64,6 +70,7 @@ os.replace(temporary, RESULT_PATH)
     poll = "import json; from pathlib import Path; p=Path(" + repr(result_path) + "); result=json.loads(p.read_text()) if p.is_file() else None; p.unlink(missing_ok=True) if result is not None else None; print(json.dumps(result))"
     for _ in range(120):
         time.sleep(5)
+        keep_awake()
         response = json.loads(run(["machine", "exec", machine_id, shlex.join(["python", "-c", poll]), "--json"], timeout=90))
         if response.get("exit_code", 0): raise RuntimeError("Could not read the private remote check")
         completed = json.loads(response["stdout"])
@@ -100,6 +107,11 @@ def configuration(original, sha, model):
 
 def main():
     if not os.getenv("FLY_API_TOKEN"): raise RuntimeError("FLY_API_TOKEN is required")
+    household_token = os.getenv("MOBILE_API_TOKEN", "").strip()
+    if len(household_token) < 32:
+        raise RuntimeError("Add a separate MOBILE_API_TOKEN repository Actions secret with at least 32 random characters")
+    if household_token == os.environ["FLY_API_TOKEN"].strip():
+        raise RuntimeError("MOBILE_API_TOKEN must differ from the Fly deployment credential")
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     machine, volume = primary(machines())
     if machine["state"] != "started":
@@ -127,11 +139,8 @@ def main():
         config, port = configuration(original, sha, model)
         updated = folder / "updated.toml"
         updated.write_text(tomli_w.dumps(config)); updated.chmod(0o600)
-        names = {s.get("Name", s.get("name")) for s in json.loads(run(["secrets", "list", "--json"]))}
-        if "MOBILE_API_TOKEN" not in names:
-            token = os.getenv("MOBILE_API_TOKEN") or os.environ["FLY_API_TOKEN"]
-            # Owner explicitly requested reuse of the deployment token for initial login.
-            run(["secrets", "import", "--stage"], stdin="MOBILE_API_TOKEN=" + token.strip() + "\n")
+        # Explicitly rotate any earlier reused value to the separate household token.
+        run(["secrets", "import", "--stage"], stdin="MOBILE_API_TOKEN=" + household_token + "\n")
         previous_image = machine["config"]["image"]
         try:
             print("Building and deploying the reviewed backend; a brief restart is expected", flush=True)

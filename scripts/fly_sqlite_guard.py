@@ -43,12 +43,25 @@ def file_digest(path):
     return checksum.hexdigest()
 
 def logical_digest(path):
-    """Compare a consistent SQLite snapshot, including every schema object and row."""
+    """Hash a locked SQLite snapshot with bounded memory, excluding backup counters."""
     checksum = hashlib.sha256()
     with sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=30) as connection:
         connection.execute("BEGIN")
-        for statement in connection.iterdump():
-            checksum.update(statement.encode("utf-8")); checksum.update(b"\n")
+        connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+        if connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal":
+            # A WAL snapshot may contain pages not yet in the main database file.
+            for statement in connection.iterdump():
+                checksum.update(statement.encode("utf-8")); checksum.update(b"\n")
+        else:
+            with Path(path).open("rb") as stream:
+                header = bytearray(stream.read(1024 * 1024))
+                # Backup updates change/schema/version-valid counters. Actual schema
+                # definitions and all row pages remain part of the digest.
+                header[24:28] = b"\0" * 4
+                header[40:44] = b"\0" * 4
+                header[92:96] = b"\0" * 4
+                checksum.update(header)
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""): checksum.update(chunk)
     return checksum.hexdigest()
 
 def backup(root="/data"):
