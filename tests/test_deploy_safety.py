@@ -15,6 +15,17 @@ from scripts import deploy_fly, fly_sqlite_guard as guard
 
 
 class DeploymentSafetyTests(unittest.TestCase):
+    def test_private_result_poll_retries_a_transient_exec_timeout(self):
+        calls = []
+        def fly(args, **kwargs):
+            calls.append(args)
+            if len(calls) == 2: raise RuntimeError("Fly exec deadline_exceeded")
+            output = {} if len(calls) == 1 else dict(exit_code=0, stdout=json.dumps(dict(integrity="ok")))
+            return json.dumps(dict(exit_code=0, stdout=json.dumps(output)))
+        with patch.object(deploy_fly, "run", side_effect=fly), patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", side_effect=OSError):
+            self.assertEqual(deploy_fly.remote("local-machine", "model"), {"integrity": "ok"})
+        self.assertEqual(sum("subprocess.Popen" in call[3] for call in calls), 1)
+
     def test_actual_remote_helper_fits_the_fly_exec_payload_limit(self):
         calls = []
         def fly(args, **kwargs):

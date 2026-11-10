@@ -4,7 +4,7 @@ from deploy_fly import run, machines, primary
 
 before, volume = primary(machines())
 image = before["config"]["image"]
-run(["machine", "update", before["id"], "--autostop", "off", "--autostart", "--yes"])
+run(["machine", "update", before["id"], "--image", image, "--autostop=off", "--autostart", "--yes"])
 after, current_volume = primary(machines())
 if current_volume != volume or after["config"]["image"] != image:
     raise RuntimeError("The existing image and volume must be preserved")
