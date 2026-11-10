@@ -1,0 +1,44 @@
+name: Publish phone-downloadable test APK
+on:
+  push:
+    branches: [codex/android-meal-tracker]
+    paths: [.github/workflows/publish-test-apk.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: '814d4f7307fb1d162d5215d2e34cddba34c9ef7e'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build test APK
+        run: ./gradlew assembleDebug
+        working-directory: android
+      - name: Publish public download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk everyday-meals-debug.apk
+          sha256sum everyday-meals-debug.apk > everyday-meals-debug.apk.sha256
+          cat > release-notes.md <<'NOTES'
+          Installable Android test build of Everyday Meals. Download everyday-meals-debug.apk directly on your Android phone. No GitHub login is required.
+
+          This is a debug-signed evaluation build. Android may ask you to allow installation from your browser. No household token or OpenAI key is embedded in the app. The updated backend must be deployed before the app can connect; then enter your household token.
+          NOTES
+          if ! gh release view android-test-2026-11-10 >/dev/null 2>&1; then
+            gh release create android-test-2026-11-10 --target 814d4f7307fb1d162d5215d2e34cddba34c9ef7e --title 'Everyday Meals — Android test build' --notes-file release-notes.md --draft --prerelease
+          fi
+          gh release upload android-test-2026-11-10 everyday-meals-debug.apk everyday-meals-debug.apk.sha256 --clobber
+          gh release edit android-test-2026-11-10 --draft=false --prerelease --notes-file release-notes.md
