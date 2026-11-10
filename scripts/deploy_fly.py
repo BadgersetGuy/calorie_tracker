@@ -65,11 +65,13 @@ def configuration(original, sha, model):
         raise RuntimeError("Saved configuration does not preserve the data mount")
     groups = list(config.get("processes", {})) or ["app"]
     if len(groups) != 1: raise RuntimeError("Multiple process groups need a reviewed deployment plan")
-    config["processes"] = {groups[0]: f"gunicorn --bind 0.0.0.0:{port} --workers 2 --timeout 150 app:app"}
+    # Initialize additive tables once before workers import the application in parallel.
+    command = f'python -c "import app" && exec gunicorn --bind 0.0.0.0:{port} --workers 2 --timeout 150 app:app'
+    config["processes"] = {groups[0]: shlex.join(["sh", "-c", command])}
     config["env"] = dict(config.get("env", {}), PORT=str(port), RELEASE_COMMIT=sha,
         HOUSEHOLD_TIMEZONE=config.get("env", {}).get("HOUSEHOLD_TIMEZONE", "Europe/Bucharest"),
         MEAL_ANALYSIS_MODEL=model, PUBLIC_API_URL=ORIGIN)
-    config["build"] = {"dockerfile": "Dockerfile"}
+    config["build"] = {"dockerfile": str(ROOT / "Dockerfile")}
     config.setdefault("deploy", {}).pop("release_command", None)
     return config, port
 
@@ -110,7 +112,7 @@ def main():
         previous_image = machine["config"]["image"]
         try:
             print("Building and deploying the reviewed backend; a brief restart is expected", flush=True)
-            run(["deploy", "--config", str(updated), "--dockerfile", str(ROOT / "Dockerfile"),
+            run(["deploy", str(ROOT), "--config", str(updated), "--dockerfile", str(ROOT / "Dockerfile"),
                 "--local-only", "--ha=false", "--strategy", "immediate", "--wait-timeout", "300", "--yes"], timeout=1500)
             after, after_volume = primary(machines())
             if after_volume != volume: raise RuntimeError("Data volume identity changed")

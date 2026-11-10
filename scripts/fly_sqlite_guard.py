@@ -130,6 +130,7 @@ def verify(manifest, port, root="/data"):
         profiles = json.loads(response.read())
         if response.status != 200 or len(profiles) != counts["user"]:
             raise RuntimeError("Authenticated profile check failed")
+    sys.path.insert(0, "/app")
     import analysis_engine
     analysis = analysis_engine.analyze(dict(text="A 250 ml cappuccino, made with whole cow milk and espresso, no sugar. Use a reasonable density estimate; it was not weighed.",
         weight=None, previous=None, conversation=[]), None)
