@@ -84,7 +84,7 @@ def register_mobile_api(app, db, User, Meal):
 
     @app.get("/health")
     def health():
-        return jsonify(status="ok", api_version=2)
+        return jsonify(status="ok", api_version=2, release=os.getenv("RELEASE_COMMIT", "local"))
 
     @app.get("/openapi.json")
     def openapi_contract():

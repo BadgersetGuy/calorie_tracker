@@ -1,0 +1,30 @@
+name: Deploy existing Fly backend
+on:
+  push:
+    branches: [codex/android-meal-tracker]
+    paths: [.github/workflows/deploy-fly.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: calorie-tracker-production-deployment
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      MOBILE_API_TOKEN: ${{ secrets.MOBILE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: '0.5.6'
+      - run: pip install tomli-w==1.2.0
+      - name: Back up, deploy, and verify without publishing private data
+        run: python scripts/deploy_fly.py
