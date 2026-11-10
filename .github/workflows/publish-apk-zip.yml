@@ -1,0 +1,29 @@
+name: Publish ZIP alternative for Android downloads
+on:
+  push:
+    branches: [codex/android-meal-tracker]
+    paths: [.github/workflows/publish-apk-zip.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Package the verified existing APK
+        run: |
+          mkdir bundle
+          gh release download android-test-2026-11-10 --pattern 'everyday-meals-debug.apk*' --dir bundle
+          cd bundle
+          sha256sum -c everyday-meals-debug.apk.sha256
+          cat > INSTALL.txt <<'NOTES'
+          Extract this ZIP using Files or My Files, then tap everyday-meals-debug.apk to install.
+          Android may ask to allow app installation from Files. This is a test build.
+          The backend deployment must be completed before the app can connect.
+          NOTES
+          zip ../everyday-meals-android.zip everyday-meals-debug.apk everyday-meals-debug.apk.sha256 INSTALL.txt
+      - name: Publish direct ZIP download
+        run: gh release upload android-test-2026-11-10 everyday-meals-android.zip --clobber
