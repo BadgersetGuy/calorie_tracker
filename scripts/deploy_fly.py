@@ -140,7 +140,7 @@ def main():
         updated = folder / "updated.toml"
         updated.write_text(tomli_w.dumps(config)); updated.chmod(0o600)
         # Explicitly rotate any earlier reused value to the separate household token.
-        run(["secrets", "import", "--stage"], stdin="MOBILE_API_TOKEN=" + household_token + "\n")
+        run(["secrets", "set", "MOBILE_API_TOKEN=-", "--stage"], stdin=household_token)
         previous_image = machine["config"]["image"]
         try:
             print("Building and deploying the reviewed backend; a brief restart is expected", flush=True)

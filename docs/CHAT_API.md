@@ -5,6 +5,22 @@ Custom GPT Action, or a Codex skill that can make HTTP requests. A general ChatG
 would still need a thin MCP adapter; a skill supplies instructions, not transport or
 credentials. No ChatGPT connection, GPT, or MCP server has been created in your account.
 
+Use a separate household token, not the Fly deployment credential. Configure the same
+random value (at least 32 characters) as the GitHub repository Actions secret
+`MOBILE_API_TOKEN` and in the Android/chat credential settings. The deployment workflow
+stages that value as the Fly runtime secret without putting it in command arguments,
+public logs, the APK, or the OpenAPI contract.
+
+Ready analyses expose an `ingredients` list with names, grams and nutrient estimates
+per 100 g. To change quantities or remove items without another model call, PUT
+`/api/v2/analyses/ID/ingredients` with `revision` and `items: [{index: 0, grams: 150}]`.
+Indices refer to the current draft list; omitted indices are removed. At least one
+item must remain. Totals and the dietary-pattern score are recalculated. New foods
+can be introduced through clarification text. For an existing meal, first POST an
+analysis with `source_meal_id` and `use_existing_analysis: true`; then review and save
+using `replace_meal_id` to update it in place. Older meals without item details need
+analysis first.
+
 ## Connection options
 
 ### Private Custom GPT

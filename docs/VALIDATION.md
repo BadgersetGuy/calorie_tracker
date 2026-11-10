@@ -2,7 +2,7 @@
 
 Updated 10 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 72 tests passed, temporary SQLite database, including private backup and deployment configuration guards, item editing, removal and reuse without another model call.
+- `python -m unittest discover -s tests -q`: 74 tests passed, temporary SQLite database, including private backup and deployment configuration guards, detached private checks, separate-token requirements, item editing, removal and reuse without another model call.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
