@@ -36,10 +36,43 @@ def inspect_database(path):
                 raise RuntimeError("Existing schema needs the explicit additive upgrade before deployment")
     return counts
 
+def file_digest(path):
+    checksum = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""): checksum.update(chunk)
+    return checksum.hexdigest()
+
+def logical_digest(path):
+    """Compare a consistent SQLite snapshot, including every schema object and row."""
+    checksum = hashlib.sha256()
+    with sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=30) as connection:
+        connection.execute("BEGIN")
+        for statement in connection.iterdump():
+            checksum.update(statement.encode("utf-8")); checksum.update(b"\n")
+    return checksum.hexdigest()
+
 def backup(root="/data"):
     path = database_path(root)
     folder = Path(root) / "backups"
     folder.mkdir(mode=0o700, exist_ok=True)
+    inspect_database(path)
+    # Retries before rollout may already have a byte-verified, identical logical copy.
+    # SQLite's backup API changes header counters, so compare all schema/data as well.
+    source_digest = None
+    for manifest in sorted(folder.glob("before-android-*.json"), reverse=True)[:3]:
+        try:
+            saved = json.loads(manifest.read_text())
+            previous = Path(saved["backup_path"])
+            if (saved["source_path"] != str(path) or saved.get("integrity") != "ok"
+                    or previous.resolve().parent != folder.resolve() or not previous.is_file()
+                    or file_digest(previous) != saved["sha256"]):
+                continue
+            if source_digest is None: source_digest = logical_digest(path)
+            if logical_digest(previous) == source_digest:
+                inspect_database(previous)
+                return saved
+        except (OSError, ValueError, KeyError, sqlite3.Error):
+            continue
     size = path.stat().st_size
     if shutil.disk_usage(root).free < size + 64 * 1024 * 1024:
         raise RuntimeError("Not enough free space for a verified local database backup")
@@ -50,10 +83,7 @@ def backup(root="/data"):
             source.backup(destination, pages=128, sleep=.05)
     os.chmod(target, 0o600)
     counts = inspect_database(target)
-    checksum = hashlib.sha256()
-    with target.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""): checksum.update(chunk)
-    result = dict(backup_path=str(target), sha256=checksum.hexdigest(), counts=counts,
+    result = dict(backup_path=str(target), sha256=file_digest(target), counts=counts,
                   source_path=str(path), integrity="ok")
     manifest = target.with_suffix(".json")
     manifest.write_text(json.dumps(result)); os.chmod(manifest, 0o600)

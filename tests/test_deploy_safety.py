@@ -38,6 +38,14 @@ class DeploymentSafetyTests(unittest.TestCase):
             manifest = backup.with_suffix(".json")
             self.assertEqual(manifest.stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(manifest.read_text()), result)
+            with patch.dict(os.environ, DATABASE_URL="sqlite:///" + str(path)):
+                with patch.object(guard.shutil, "disk_usage", return_value=type("Space", (), {"free": 0})()):
+                    self.assertEqual(guard.backup(root), result)
+                with sqlite3.connect(path) as changed:
+                    changed.execute("UPDATE meal SET calories=500 WHERE id=1")
+                with patch.object(guard.shutil, "disk_usage", return_value=type("Space", (), {"free": 0})()):
+                    with self.assertRaises(RuntimeError):
+                        guard.backup(root)
             with patch.dict(os.environ, DATABASE_URL="sqlite:////tmp/missing-meals.db"):
                 with self.assertRaises(RuntimeError):
                     guard.database_path(root)

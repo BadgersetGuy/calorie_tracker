@@ -89,7 +89,7 @@ def main():
     print("Provider vision access verified for " + model, flush=True)
     backup = remote(machine["id"], "backup")
     if backup.get("integrity") != "ok": raise RuntimeError("Backup integrity was not confirmed")
-    print("Private SQLite backup created and verified on the Fly volume", flush=True)
+    print("Private SQLite backup confirmed and verified on the Fly volume", flush=True)
     run(["volumes", "snapshots", "create", volume])
     print("Additional Fly volume snapshot requested", flush=True)
     with tempfile.TemporaryDirectory(prefix="fly-deploy-") as folder:
