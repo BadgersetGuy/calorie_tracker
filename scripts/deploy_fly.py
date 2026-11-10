@@ -102,6 +102,11 @@ def configuration(original, sha, model):
     config["env"] = dict(config.get("env", {}), PORT=str(port), RELEASE_COMMIT=sha,
         HOUSEHOLD_TIMEZONE=config.get("env", {}).get("HOUSEHOLD_TIMEZONE", "Europe/Bucharest"),
         MEAL_ANALYSIS_MODEL=model, PUBLIC_API_URL=ORIGIN)
+    # Owner selected an always-warm single server to avoid idle wake-up latency.
+    for service in config.get("services", []):
+        service.update(auto_stop_machines="off", auto_start_machines=True, min_machines_running=1)
+    if "http_service" in config:
+        config["http_service"].update(auto_stop_machines="off", auto_start_machines=True, min_machines_running=1)
     config["build"] = {"dockerfile": "Dockerfile"}
     config.setdefault("deploy", {}).pop("release_command", None)
     return config, port

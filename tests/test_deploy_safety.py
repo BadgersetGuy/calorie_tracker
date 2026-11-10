@@ -130,6 +130,8 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertEqual(config["build"]["dockerfile"], "Dockerfile")
         self.assertTrue((deploy_fly.ROOT / config["build"]["dockerfile"]).is_file())
         self.assertIn('python -c "import app"', config["processes"]["web"])
+        self.assertEqual(config["http_service"]["auto_stop_machines"], "off")
+        self.assertEqual(config["http_service"]["min_machines_running"], 1)
         self.assertEqual(original, saved)
         del original["mounts"]
         with self.assertRaises(RuntimeError):
