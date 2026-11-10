@@ -9,7 +9,7 @@ import os
 import requests
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-PROMPT_VERSION = "meal-2.0"
+PROMPT_VERSION = "meal-2.1"
 SCORE_VERSION = "diet-pattern-1.0"
 MODEL = os.getenv("MEAL_ANALYSIS_MODEL", "gpt-6.1-sol")
 PHOTO_MAX_EDGE = 1280
@@ -45,6 +45,9 @@ must be empty. If sufficient context exists, return status=ready, questions=[], 
 estimates and explicit assumptions. After clarifications, avoid repeating answered
 questions. Allow the user to request a best estimate; state uncertainties. Don't demand
 grams for household measures like cups or a 250ml cappuccino. Keep response concise.
+The latest correction or manual item edit overrides earlier descriptions and quantities.
+Never restore a removed item unless the user requests it. Retain unchanged components
+and their nutrient densities when adding a new food.
 For each component select one dietary group and flag allergens/potential personal
 triggers only when supported (gluten, dairy, eggs, nightshades); these aren't universal
 psoriasis triggers. source_note must explain whether nutrition came from the user's

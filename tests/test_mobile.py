@@ -120,6 +120,66 @@ class MobileTests(unittest.TestCase):
         self.assertEqual(Meal.query.count(), 1)
         self.assertEqual(first.json["date"], "2026-11-09T10:00:00Z")
 
+    def edit_items(self, draft, items, revision=None):
+        return self.client.put(f"/api/v2/analyses/{draft['id']}/ingredients", headers=self.headers,
+            json=dict(revision=draft["revision"] if revision is None else revision, items=items))
+
+    def test_item_quantities_and_removal_recalculate_without_model(self):
+        draft = self.start()
+        with patch("analysis_engine.analyze") as provider:
+            edited = self.edit_items(draft, [dict(index=0, grams=70)])
+        self.assertEqual(edited.status_code, 200, edited.json)
+        provider.assert_not_called()
+        value = edited.json["result"]
+        self.assertEqual(value["weight"], 70)
+        self.assertEqual(value["totals"]["calories"], 49)
+        self.assertEqual(value["score"]["value"], 100)
+        self.assertEqual(value["ingredients"][0]["per_100g"], draft["result"]["ingredients"][0]["per_100g"])
+        self.assertNotIn("Milk", value["description"])
+        self.assertEqual(Meal.query.count(), 0)
+        self.assertEqual(self.edit_items(draft, [dict(index=0, grams=90)]).status_code, 409)
+        saved = self.save(edited.json)
+        self.assertEqual(saved.json["calories"], 49)
+        self.assertEqual(self.edit_items(edited.json, [dict(index=0, grams=90)]).status_code, 409)
+
+    def test_invalid_item_edits_do_not_mutate_draft(self):
+        draft = self.start()
+        for items in ([], [dict(index=0, grams=0)], [dict(index=4, grams=100)],
+                [dict(index=True, grams=100)], [dict(index=0, grams=100), dict(index=0, grams=100)],
+                [dict(index=0, grams=15000), dict(index=1, grams=15000)]):
+            response = self.edit_items(draft, items)
+            self.assertEqual(response.status_code, 400, response.json)
+        current = self.client.get(f"/api/v2/analyses/{draft['id']}", headers=self.headers).json
+        self.assertEqual(current["revision"], draft["revision"])
+        self.assertEqual(current["result"], draft["result"])
+
+    def test_edit_saved_items_uses_existing_analysis_and_defers_changes_until_save(self):
+        meal = self.save(self.start()).json
+        with patch("analysis_engine.analyze") as provider:
+            draft = self.post("/analyses", dict(user_id=self.a.id, source_meal_id=meal["id"],
+                use_existing_analysis=True, text=meal["description"])).json
+        provider.assert_not_called()
+        edited = self.edit_items(draft, [dict(index=1, grams=50)]).json
+        self.assertEqual(db.session.get(Meal, meal["id"]).calories, meal["calories"])
+        saved = self.save(edited, replace_meal_id=meal["id"])
+        self.assertEqual(saved.status_code, 201, saved.json)
+        self.assertEqual(saved.json["id"], meal["id"])
+        self.assertEqual(saved.json["date"], meal["date"])
+        self.assertEqual(saved.json["calories"], 30)
+        self.assertEqual(Meal.query.count(), 1)
+
+    def test_text_correction_receives_the_latest_manual_item_list(self):
+        draft = self.start(dict(weight=200))
+        edited = self.edit_items(draft, [dict(index=0, grams=80)]).json
+        with patch("analysis_engine.analyze", return_value=result()) as provider:
+            response = self.post(f"/analyses/{draft['id']}/clarifications", dict(revision=edited["revision"], text="Add 10 g almonds"))
+        self.assertEqual(response.status_code, 200)
+        context = provider.call_args.args[0]
+        self.assertIsNone(context["weight"])
+        self.assertEqual(context["previous"]["ingredients"], edited["result"]["ingredients"])
+        self.assertEqual(len(context["previous"]["ingredients"]), 1)
+        self.assertEqual(context["conversation"][-1]["answer"], "Add 10 g almonds")
+
     def test_clarify_then_reanalyse_with_history(self):
         question = dict(status="clarify", description="Drink", questions=["Which milk?"], assumptions=[], confidence="low", ingredients=[])
         with patch("analysis_engine.analyze", return_value=question):

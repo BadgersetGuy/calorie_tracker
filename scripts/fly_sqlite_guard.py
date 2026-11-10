@@ -100,7 +100,12 @@ def verify(manifest, port, root="/data"):
         profiles = json.loads(response.read())
         if response.status != 200 or len(profiles) != counts["user"]:
             raise RuntimeError("Authenticated profile check failed")
-    return dict(integrity="ok", records_preserved=True, authenticated_profiles=True)
+    import analysis_engine
+    analysis = analysis_engine.analyze(dict(text="A 250 ml cappuccino, made with whole cow milk and espresso, no sugar. Use a reasonable density estimate; it was not weighed.",
+        weight=None, previous=None, conversation=[]), None)
+    if analysis.get("status") not in ("ready", "clarify"):
+        raise RuntimeError("Structured meal analysis smoke check failed")
+    return dict(integrity="ok", records_preserved=True, authenticated_profiles=True, structured_analysis=True)
 
 if __name__ == "__main__":
     try:

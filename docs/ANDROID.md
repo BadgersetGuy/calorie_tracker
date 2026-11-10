@@ -11,6 +11,13 @@ The Flask server retains the database, photos, analysis credentials, and househo
 - Persisted analysis drafts, targeted clarification questions and text corrections.
 - Review estimates and assumptions, reanalyse before saving, or correct an existing meal
   without replacing its ID or original date. Unchanged meals remain saved until confirmation.
+- Every analysed meal shows its item breakdown. Edit individual grams or remove items
+  without a model call; totals and the dietary score recalculate from the same nutrient
+  estimates. Add an item by name/grams, or use a text correction with other units. New
+  foods are estimated by the model and may prompt a clarification before saving.
+- Open **Edit items / quantities** on an existing analysed meal to reuse its analysis
+  immediately. Changes remain in a draft until **Save changes to meal**. Older meals
+  without ingredient details need analysis first.
 - Reuse any historical meal for the same person or another profile, on a chosen date.
   Scale by percentage or grams. Copying uses arithmetic and never calls the model.
 - Previous meals without ingredient analysis can still be copied. No new score is fabricated.

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -245,6 +246,8 @@ fun AddMeal(vm: MealViewModel) {
         }
     }
     var discard by remember { mutableStateOf(false) }
+    var editItems by rememberSaveable { mutableStateOf(false) }
+    var addItem by rememberSaveable { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { Text(if (vm.editSource > 0) "Update meal analysis" else "What's on your plate?", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
             Text("For ${vm.currentProfile?.optString("username") ?: "you"}", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -297,6 +300,12 @@ fun AddMeal(vm: MealViewModel) {
                 } }
             }
             if (ready) item { AnalysisResult(result) }
+            if (ready) item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { editItems = true }, enabled = !vm.busy && vm.clarification.isBlank()) { Text("Edit items") }
+                    OutlinedButton(onClick = { addItem = true }, enabled = !vm.busy && vm.clarification.isBlank()) { Icon(Icons.Outlined.Add, null); Text("Add item") }
+                }
+            }
             item { OutlinedTextField(vm.clarification, { vm.clarification = it }, Modifier.fillMaxWidth(), enabled = !vm.busy,
                 label = { Text(if (ready) "Add a correction or clarification" else "Your answer") }, minLines = 2,
                 placeholder = { Text(if (ready) "Only 1 teaspoon of oil, and 150 g cooked rice" else "Whole milk, no sugar, 250 ml total") }) }
@@ -309,6 +318,63 @@ fun AddMeal(vm: MealViewModel) {
     }
     if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("Discard this entry?") }, text = { Text("Any saved meal stays unchanged.") },
         confirmButton = { TextButton(onClick = { discard = false; vm.resetEntry() }) { Text("Discard") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("Keep editing") } })
+    if (editItems && vm.draft != null) IngredientEditorDialog(vm) { editItems = false }
+    if (addItem && vm.draft != null) AddIngredientDialog(vm) { addItem = false }
+}
+
+@Composable
+fun IngredientEditorDialog(vm: MealViewModel, close: () -> Unit) {
+    val draft = vm.draft ?: return
+    var encoded by rememberSaveable(draft.getString("id"), draft.getInt("revision")) {
+        mutableStateOf(JSONArray(draft.getJSONObject("result").getJSONArray("ingredients").objects().mapIndexed { index, item ->
+            JSONObject().put("index", index).put("name", item.getString("name")).put("grams", item.getDouble("grams").toString())
+        }).toString())
+    }
+    val rows = JSONArray(encoded).objects()
+    val amounts = rows.map { it.getString("grams").replace(',', '.').toDoubleOrNull() }
+    val valid = rows.isNotEmpty() && amounts.all { it != null && it.isFinite() && it > 0 && it <= 20000 } && amounts.sumOf { it ?: 0.0 } <= 20000
+    AlertDialog(onDismissRequest = { if (!vm.busy) close() }, title = { Text("Meal items") }, text = {
+        LazyColumn(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            item { Text("Change grams or remove items. Totals and the dietary score recalculate when you apply. Your saved meal changes only after Save meal.", style = MaterialTheme.typography.bodySmall) }
+            items(rows, key = { it.getInt("index") }) { row ->
+                Column {
+                    Text(row.getString("name"), fontWeight = FontWeight.Medium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(row.getString("grams"), { value ->
+                            encoded = JSONArray(rows.map { JSONObject(it.toString()).apply { if (getInt("index") == row.getInt("index")) put("grams", value) } }).toString()
+                        }, Modifier.weight(1f), label = { Text("Grams") }, singleLine = true, enabled = !vm.busy,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                        IconButton(onClick = { encoded = JSONArray(rows.filter { it.getInt("index") != row.getInt("index") }).toString() }, enabled = !vm.busy && rows.size > 1) {
+                            Icon(Icons.Outlined.DeleteOutline, "Remove ${row.getString("name")}")
+                        }
+                    }
+                }
+            }
+            vm.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+        }
+    }, confirmButton = {
+        TextButton(onClick = {
+            val items = JSONArray(rows.mapIndexed { index, row -> JSONObject().put("index", row.getInt("index")).put("grams", amounts[index]) })
+            vm.updateIngredients(items, close)
+        }, enabled = valid && !vm.busy) { Text("Apply quantities") }
+    }, dismissButton = { TextButton(onClick = close, enabled = !vm.busy) { Text("Cancel") } })
+}
+
+@Composable
+fun AddIngredientDialog(vm: MealViewModel, close: () -> Unit) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var grams by rememberSaveable { mutableStateOf("") }
+    val amount = grams.replace(',', '.').toDoubleOrNull()
+    AlertDialog(onDismissRequest = { if (!vm.busy) close() }, title = { Text("Add meal item") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(name, { name = it }, label = { Text("Food or ingredient") }, placeholder = { Text("Cooked rice, olive oil…") }, enabled = !vm.busy)
+            OutlinedTextField(grams, { grams = it }, label = { Text("Grams") }, singleLine = true, enabled = !vm.busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            Text("Review the new nutrition estimate before saving. If anything is unclear, you can answer in the text input.", style = MaterialTheme.typography.bodySmall)
+            vm.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }, confirmButton = { TextButton(onClick = { vm.addIngredient(name, amount!!, close) },
+        enabled = !vm.busy && name.isNotBlank() && amount != null && amount.isFinite() && amount > 0 && amount <= 20000) { Text(if (vm.busy) "Analysing…" else "Add item") }
+    }, dismissButton = { TextButton(onClick = close, enabled = !vm.busy) { Text("Cancel") } })
 }
 
 @Composable
@@ -417,6 +483,9 @@ fun MealDialog(vm: MealViewModel, meal: JSONObject) {
             }
             if (meal.has("legacy_psoriasis_score") && !meal.isNull("legacy_psoriasis_score")) item {
                 Text("Historical psoriasis score: ${meal.optDouble("legacy_psoriasis_score")}/10. Preserved from the original analysis; its old prompt-based scale is separate from the new dietary-pattern rubric.", style = MaterialTheme.typography.bodySmall)
+            }
+            if (meal.optJSONObject("analysis")?.optString("status") == "ready") item {
+                OutlinedButton(onClick = { vm.editMealItems(meal) }, enabled = !vm.busy) { Text("Edit items / quantities") }
             }
             item { OutlinedButton(onClick = { vm.reanalyze(meal) }, enabled = !vm.busy) { Text("Correct / reanalyse meal") } }
             item { TextButton(onClick = { delete = true }, enabled = !vm.busy) { Text("Delete meal", color = MaterialTheme.colorScheme.error) } }

@@ -8,11 +8,10 @@ permissions:
   contents: write
 jobs:
   publish:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: '814d4f7307fb1d162d5215d2e34cddba34c9ef7e'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -35,10 +34,20 @@ jobs:
           cat > release-notes.md <<'NOTES'
           Installable Android test build of Everyday Meals. Download everyday-meals-debug.apk directly on your Android phone. No GitHub login is required.
 
-          This is a debug-signed evaluation build. Android may ask you to allow installation from your browser. No household token or OpenAI key is embedded in the app. The updated backend must be deployed before the app can connect; then enter your household token.
+          Version 2.0.1 adds direct item quantity/removal controls and an Add item action, alongside text corrections. Existing analysed meals can be edited without rerunning detection.
+
+          This is a debug-signed evaluation build. Android may ask you to allow installation from your browser. No household token or OpenAI key is embedded in the app. Enter the HTTPS server address and household token to connect. If a previous test APK has an incompatible signature, uninstall that test app first; meals remain on the server. Keep your household token privately so you can reconnect.
           NOTES
-          if ! gh release view android-test-2026-11-10 >/dev/null 2>&1; then
-            gh release create android-test-2026-11-10 --target 814d4f7307fb1d162d5215d2e34cddba34c9ef7e --title 'Everyday Meals — Android test build' --notes-file release-notes.md --draft --prerelease
+          cp everyday-meals-debug.apk everyday-meals-debug.apk.sha256 /tmp/
+          cat > /tmp/INSTALL.txt <<'INSTALL'
+          Extract this ZIP in Files / My Files, then tap everyday-meals-debug.apk.
+          If Android reports a signature mismatch with an older test version, uninstall
+          that test app before installing this version. Your server meals are preserved;
+          enter the server address and household token again after installing.
+          INSTALL
+          (cd /tmp && zip -q "$GITHUB_WORKSPACE/everyday-meals-android.zip" everyday-meals-debug.apk everyday-meals-debug.apk.sha256 INSTALL.txt)
+          if ! gh release view android-test-2026-11-10-items >/dev/null 2>&1; then
+            gh release create android-test-2026-11-10-items --target "$GITHUB_SHA" --title 'Everyday Meals — Android test build' --notes-file release-notes.md --draft --prerelease
           fi
-          gh release upload android-test-2026-11-10 everyday-meals-debug.apk everyday-meals-debug.apk.sha256 --clobber
-          gh release edit android-test-2026-11-10 --draft=false --prerelease --notes-file release-notes.md
+          gh release upload android-test-2026-11-10-items everyday-meals-debug.apk everyday-meals-debug.apk.sha256 everyday-meals-android.zip --clobber
+          gh release edit android-test-2026-11-10-items --draft=false --prerelease --notes-file release-notes.md

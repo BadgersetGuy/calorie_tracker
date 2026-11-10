@@ -281,10 +281,24 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString("draft", draft!!.getString("id")).apply()
     }
     fun clarify() = work {
-        val current = draft ?: return@work
-        val data = JSONObject().put("revision", current.getInt("revision")).put("text", clarification)
+        submitClarification(clarification)
+    }
+    private suspend fun submitClarification(message: String) {
+        val current = draft ?: return
+        val data = JSONObject().put("revision", current.getInt("revision")).put("text", message)
         draft = JSONObject(api("/analyses/${current.getString("id")}/clarifications", "POST", data))
         clarification = ""
+    }
+    fun updateIngredients(items: JSONArray, onApplied: () -> Unit) = work {
+        val current = draft ?: return@work
+        val data = JSONObject().put("revision", current.getInt("revision")).put("items", items)
+        draft = JSONObject(api("/analyses/${current.getString("id")}/ingredients", "PUT", data))
+        onApplied()
+    }
+    fun addIngredient(name: String, grams: Double, onApplied: () -> Unit) = work {
+        require(name.isNotBlank() && grams.isFinite() && grams > 0 && grams <= 20000) { "Enter an item name and positive grams" }
+        submitClarification("Add this food to the CURRENT ingredient list: ${name.trim()}, $grams grams. Keep all existing components, their grams and nutrient densities unchanged. Estimate the added food, asking a short clarification if needed.")
+        onApplied()
     }
     fun reloadDraft() = work { draft?.let { draft = JSONObject(api("/analyses/${it.getString("id")}")) } }
     fun save() = work {
@@ -307,6 +321,16 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         eatingTimezone = timing?.optString("timezone")?.takeIf { it.isNotBlank() } ?: ZoneId.systemDefault().id
         eatenAt = OffsetDateTime.parse(meal.getString("date")).atZoneSameInstant(ZoneId.of(eatingTimezone)).toOffsetDateTime()
         description = meal.getString("description"); mealDetail = null; tab = 1; persistEntry()
+    }
+    fun editMealItems(meal: JSONObject) {
+        if (draft != null || description.isNotBlank() || photoUri != null) { error = "Save or discard your current entry first."; return }
+        reanalyze(meal)
+        work {
+            val data = JSONObject().put("user_id", profileId).put("source_meal_id", editSource)
+                .put("text", description).put("use_existing_analysis", true)
+            draft = JSONObject(api("/analyses", "POST", data))
+            prefs.edit().putString("draft", draft!!.getString("id")).apply()
+        }
     }
     fun openCopy(meal: JSONObject) { copyMeal = meal; copyKey = UUID.randomUUID().toString() }
     fun copyTo(target: Int, amount: String, byWeight: Boolean, date: LocalDate, time: java.time.LocalTime) = work {

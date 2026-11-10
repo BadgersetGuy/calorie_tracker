@@ -95,6 +95,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="fly-deploy-") as folder:
         folder = Path(folder)
         old = folder / "previous.toml"
+        old.write_text('app = "' + APP + '"\n')
+        old.chmod(0o600)
         run(["config", "save", "--config", str(old), "--yes"])
         original = tomllib.loads(old.read_text())
         config, port = configuration(original, sha, model)

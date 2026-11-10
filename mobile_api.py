@@ -281,6 +281,7 @@ def register_mobile_api(app, db, User, Meal):
         photo = photo_from_request(data)
         previous = None
         source_signature = None
+        reused = None
         if data.get("source_meal_id"):
             source = db.session.get(Meal, int(data["source_meal_id"]))
             if not source:
@@ -291,13 +292,19 @@ def register_mobile_api(app, db, User, Meal):
             previous = json.loads(detail.analysis) if detail and detail.analysis else {
                 "description": source.description, "weight": source.weight,
                 "totals": {n: getattr(source, n) for n in ("calories", "protein", "carbs", "fat")}}
+            if data.get("use_existing_analysis") is True:
+                if previous.get("status") != "ready" or not previous.get("ingredients"):
+                    raise ValueError("This older meal needs analysis before individual items can be edited")
+                reused = engine.calculate(previous)
+        elif data.get("use_existing_analysis"):
+            raise ValueError("Choose an existing meal to edit its items")
         if not description and not photo:
             raise ValueError("Take a photo or describe your meal")
         weight = engine.positive(data["weight"], "Weight", False, 20000) if data.get("weight") else None
         context = dict(text=description, weight=weight, previous=previous, conversation=[],
             source_meal_id=data.get("source_meal_id"), source_signature=source_signature)
         try:
-            result = perform(context, photo)
+            result = reused if reused is not None else perform(context, photo)
         except RuntimeError as error:
             return jsonify(error=str(error)), 502
         draft = Draft(id=str(uuid.uuid4()), user_id=profile.id, context=json.dumps(context),
@@ -350,6 +357,55 @@ def register_mobile_api(app, db, User, Meal):
             result = perform(context, draft.photo)
         except RuntimeError as error:
             return jsonify(error=str(error)), 502
+        updated = db.session.execute(update(Draft).where(Draft.id == draft.id,
+            Draft.revision == revision, Draft.saved_meal_id.is_(None)).values(
+                context=json.dumps(context), result=json.dumps(result), revision=revision + 1))
+        if updated.rowcount != 1:
+            db.session.rollback()
+            return jsonify(error="Analysis changed while you were editing; reload it."), 409
+        db.session.commit()
+        db.session.expire_all()
+        return jsonify(draft_data(get_draft(draft_id)))
+
+    @api.put("/analyses/<draft_id>/ingredients")
+    def edit_ingredients(draft_id):
+        data = body()
+        draft = get_draft(draft_id)
+        revision = int(data.get("revision", 0))
+        if draft.saved_meal_id or revision != draft.revision:
+            return jsonify(error="Analysis changed or was saved. Reload before editing items."), 409
+        result = json.loads(draft.result)
+        if result.get("status") != "ready":
+            raise ValueError("Finish the clarification before editing item quantities")
+        items = data.get("items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 40:
+            raise ValueError("Keep at least one item, with at most 40 items")
+        original = result["ingredients"]
+        kept, seen = [], set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("Each item needs its original index and grams")
+            index = item.get("index")
+            if type(index) is not int or not 0 <= index < len(original) or index in seen:
+                raise ValueError("Item indices must be unique and refer to the current analysis")
+            seen.add(index)
+            component = dict(original[index])
+            component["grams"] = engine.positive(item.get("grams"), "Item grams", False, 20000)
+            kept.append(component)
+        if sum(item["grams"] for item in kept) > 20000:
+            raise ValueError("Total meal weight must be at most 20000 grams")
+        result["ingredients"] = kept
+        result["description"] = ", ".join(f'{item["name"]} ({item["grams"]:g} g)' for item in kept)
+        note = "Item quantities and removals were set by the user; retained nutrient estimates per 100 g are unchanged."
+        result["assumptions"] = list(dict.fromkeys([*result.get("assumptions", []), note]))
+        result = engine.calculate(result)
+        context = json.loads(draft.context)
+        if len(context["conversation"]) >= 30:
+            raise ValueError("Please start a new analysis")
+        context["conversation"].append(dict(questions=[], answer="Replace the earlier item list and quantities with exactly: " + result["description"] + ". Removed items are no longer in this meal."))
+        context["previous"] = result
+        context["previous_explicit_weight"] = context.get("weight")
+        context["weight"] = None
         updated = db.session.execute(update(Draft).where(Draft.id == draft.id,
             Draft.revision == revision, Draft.saved_meal_id.is_(None)).values(
                 context=json.dumps(context), result=json.dumps(result), revision=revision + 1))

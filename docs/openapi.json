@@ -727,6 +727,9 @@
                   "source_meal_id": {
                     "type": "integer"
                   },
+                  "use_existing_analysis": {
+                    "type": "boolean"
+                  },
                   "image_data": {
                     "type": "string",
                     "format": "byte",
@@ -970,6 +973,90 @@
                 "required": [
                   "revision",
                   "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/analyses/{draft_id}/ingredients": {
+      "put": {
+        "operationId": "mobile_edit_ingredients",
+        "summary": "Edit ingredients",
+        "description": "Change grams or remove items from a ready draft without another model request. Submit the retained original ingredient indices and positive grams. Omitted items are removed. Totals and dietary score are recalculated from unchanged nutrient densities. To edit an existing meal, first create a draft using source_meal_id and use_existing_analysis=true, then review and save it. Add or identify new foods through clarification text.",
+        "responses": {
+          "200": {
+            "description": "Successful JSON response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing/invalid household token"
+          },
+          "409": {
+            "description": "Revision or idempotency conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "revision": {
+                    "type": "integer"
+                  },
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 40,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "index": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "grams": {
+                          "type": "number",
+                          "exclusiveMinimum": 0,
+                          "maximum": 20000
+                        }
+                      },
+                      "required": [
+                        "index",
+                        "grams"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "revision",
+                  "items"
                 ],
                 "additionalProperties": false
               }
