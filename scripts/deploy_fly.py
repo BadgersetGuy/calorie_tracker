@@ -85,13 +85,13 @@ def main():
             time.sleep(2)
         else: raise RuntimeError("Existing Machine did not start")
     print("Existing Machine and persistent data mount verified", flush=True)
+    model = remote(machine["id"], "model")["model"]
+    print("Provider vision access verified for " + model, flush=True)
     backup = remote(machine["id"], "backup")
     if backup.get("integrity") != "ok": raise RuntimeError("Backup integrity was not confirmed")
     print("Private SQLite backup created and verified on the Fly volume", flush=True)
     run(["volumes", "snapshots", "create", volume])
     print("Additional Fly volume snapshot requested", flush=True)
-    model = remote(machine["id"], "model")["model"]
-    print("Provider vision access verified for " + model, flush=True)
     with tempfile.TemporaryDirectory(prefix="fly-deploy-") as folder:
         folder = Path(folder)
         old = folder / "previous.toml"
