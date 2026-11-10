@@ -97,9 +97,13 @@ def verify(manifest, port, root="/data"):
     return dict(integrity="ok", records_preserved=True, authenticated_profiles=True)
 
 if __name__ == "__main__":
-    action = sys.argv[1]
-    if action == "backup": result = backup()
-    elif action == "model": result = choose_model()
-    elif action == "verify": result = verify(sys.argv[2], int(sys.argv[3]))
-    else: raise RuntimeError("Unknown guard action")
+    try:
+        action = sys.argv[1]
+        if action == "backup": result = backup()
+        elif action == "model": result = choose_model()
+        elif action == "verify": result = verify(sys.argv[2], int(sys.argv[3]))
+        else: raise RuntimeError("Unknown guard action")
+    except Exception as error:
+        # RuntimeError messages above are fixed text, never provider responses or data.
+        result = {"guard_error": str(error) if type(error) is RuntimeError else type(error).__name__}
     print(json.dumps(result))

@@ -47,7 +47,10 @@ def remote(machine_id, *args):
     response = json.loads(run(["machine", "exec", machine_id, command, "--timeout", "600", "--json"], timeout=660))
     if response.get("exit_code", 0) != 0:
         raise RuntimeError("Remote database/provider check failed; private remote output was not published")
-    return json.loads(response["stdout"])
+    result = json.loads(response["stdout"])
+    if result.get("guard_error"):
+        raise RuntimeError("Remote guard: " + result["guard_error"])
+    return result
 
 def configuration(original, sha, model):
     config = copy.deepcopy(original)
