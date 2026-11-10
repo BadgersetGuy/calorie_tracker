@@ -81,8 +81,8 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertEqual(config["env"]["KEEP"], "existing")
         self.assertEqual(config["env"]["RELEASE_COMMIT"], "revision")
         self.assertEqual(config["env"]["MEAL_ANALYSIS_MODEL"], "accessible-model")
-        self.assertEqual(config["build"]["dockerfile"], str(deploy_fly.ROOT / "Dockerfile"))
-        self.assertTrue(Path(config["build"]["dockerfile"]).is_file())
+        self.assertEqual(config["build"]["dockerfile"], "Dockerfile")
+        self.assertTrue((deploy_fly.ROOT / config["build"]["dockerfile"]).is_file())
         self.assertIn('python -c "import app"', config["processes"]["web"])
         self.assertEqual(original, saved)
         del original["mounts"]

@@ -101,7 +101,7 @@ def configuration(original, sha, model):
     config["env"] = dict(config.get("env", {}), PORT=str(port), RELEASE_COMMIT=sha,
         HOUSEHOLD_TIMEZONE=config.get("env", {}).get("HOUSEHOLD_TIMEZONE", "Europe/Bucharest"),
         MEAL_ANALYSIS_MODEL=model, PUBLIC_API_URL=ORIGIN)
-    config["build"] = {"dockerfile": str(ROOT / "Dockerfile")}
+    config["build"] = {"dockerfile": "Dockerfile"}
     config.setdefault("deploy", {}).pop("release_command", None)
     return config, port
 
@@ -129,7 +129,8 @@ def main():
     print("Private SQLite backup confirmed and verified on the Fly volume", flush=True)
     run(["volumes", "snapshots", "create", volume])
     print("Additional Fly volume snapshot requested", flush=True)
-    with tempfile.TemporaryDirectory(prefix="fly-deploy-") as folder:
+    with tempfile.TemporaryDirectory(prefix="fly-deploy-") as folder, tempfile.NamedTemporaryFile(
+            prefix=".fly-deploy-", suffix=".toml", dir=ROOT) as deploy_config:
         folder = Path(folder)
         old = folder / "previous.toml"
         old.write_text('app = "' + APP + '"\n')
@@ -137,14 +138,16 @@ def main():
         run(["config", "save", "--config", str(old), "--yes"])
         original = tomllib.loads(old.read_text())
         config, port = configuration(original, sha, model)
-        updated = folder / "updated.toml"
+        # Fly resolves Dockerfile paths relative to this file even with an explicit
+        # build context. Keep the generated config beside the actual Dockerfile.
+        updated = Path(deploy_config.name)
         updated.write_text(tomli_w.dumps(config)); updated.chmod(0o600)
         # Explicitly rotate any earlier reused value to the separate household token.
         run(["secrets", "set", "MOBILE_API_TOKEN=-", "--stage"], stdin=household_token)
         previous_image = machine["config"]["image"]
         try:
             print("Building and deploying the reviewed backend; a brief restart is expected", flush=True)
-            run(["deploy", str(ROOT), "--config", str(updated), "--dockerfile", str(ROOT / "Dockerfile"),
+            run(["deploy", str(ROOT), "--config", str(updated),
                 "--local-only", "--ha=false", "--strategy", "immediate", "--wait-timeout", "300", "--yes"], timeout=1500)
             after, after_volume = primary(machines())
             if after_volume != volume: raise RuntimeError("Data volume identity changed")
