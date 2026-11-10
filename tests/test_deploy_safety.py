@@ -12,9 +12,17 @@ import unittest
 from unittest.mock import patch
 
 from scripts import deploy_fly, fly_sqlite_guard as guard
+from scripts import keep_fly_warm
 
 
 class DeploymentSafetyTests(unittest.TestCase):
+    def test_warm_policy_compares_image_content_after_reference_normalization(self):
+        before = dict(config=dict(image="registry/app:tag"), image_ref=dict(digest="sha256:same-content"))
+        after = dict(config=dict(image="registry/app@sha256:same-content"), image_ref=dict(digest="sha256:same-content"))
+        self.assertTrue(keep_fly_warm.same_image(before, after))
+        after["image_ref"]["digest"] = "sha256:different-content"
+        self.assertFalse(keep_fly_warm.same_image(before, after))
+
     def test_private_result_poll_retries_a_transient_exec_timeout(self):
         calls = []
         def fly(args, **kwargs):
