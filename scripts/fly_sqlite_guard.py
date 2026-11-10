@@ -77,7 +77,13 @@ def choose_model():
                 if response.status == 200: return dict(model=model, vision_access=True)
         except HTTPError as error:
             if error.code in (401, 429):
-                raise RuntimeError("Provider credential/quota needs attention before rollout") from None
+                try:
+                    code = json.loads(error.read()).get("error", {}).get("code")
+                except (ValueError, AttributeError):
+                    code = None
+                allowed = {"invalid_api_key", "insufficient_quota", "rate_limit_exceeded", "billing_hard_limit_reached"}
+                reason = code if code in allowed else "credential_or_quota"
+                raise RuntimeError("Provider HTTP " + str(error.code) + ": " + reason) from None
             if error.code not in (400, 403, 404): raise RuntimeError("Provider access check failed") from None
     raise RuntimeError("None of the configured upgraded vision models is accessible")
 
