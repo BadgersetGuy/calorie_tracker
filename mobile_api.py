@@ -158,7 +158,7 @@ def register_mobile_api(app, db, User, Meal):
                     analysis=json.loads(detail.analysis) if detail and detail.analysis else None,
                     source_meal_id=detail.source_meal_id if detail else None)
 
-    def summaries(query):
+    def summaries(query, full_analysis=False):
         # Avoid selecting large historical photos, hashing them for revisions, or
         # running per-row metadata queries merely to draw a list.
         rows = query.options(defer(Meal.image_data)).add_columns(Meal.image_data.isnot(None)).all()
@@ -174,7 +174,7 @@ def register_mobile_api(app, db, User, Meal):
                 protein=meal.protein, carbs=meal.carbs, fat=meal.fat, has_photo=bool(photo),
                 legacy_psoriasis_score=meal.psoriasis_score,
                 discipline=json.loads(timing.score_data) if timing else meal_timing.score(meal_timing.local_time(meal.date), inferred=True),
-                analysis=dict(score=analysis.get("score")) if analysis else None,
+                analysis=(analysis if full_analysis else dict(score=analysis.get("score"))) if analysis else None,
                 source_meal_id=detail.source_meal_id if detail else None))
         return result
 
@@ -574,8 +574,10 @@ def register_mobile_api(app, db, User, Meal):
                 return jsonify(error="Suggestion request key was already used"), 409
             return jsonify(payload)
         history = []
-        for record in Meal.query.filter_by(user_id=profile.id).order_by(Meal.date.desc(), Meal.id.desc()).limit(120):
-            detail = db.session.get(Details, record.id)
+        recent = Meal.query.options(defer(Meal.image_data)).filter_by(user_id=profile.id).order_by(Meal.date.desc(), Meal.id.desc()).limit(120).all()
+        recent_details = {d.meal_id: d for d in Details.query.filter(Details.meal_id.in_([m.id for m in recent])).all()} if recent else {}
+        for record in recent:
+            detail = recent_details.get(record.id)
             analysis = json.loads(detail.analysis) if detail and detail.analysis else {}
             history.append(dict(description=record.description or "", ingredients=[i["name"] for i in analysis.get("ingredients", [])]))
         batches = SuggestionBatch.query.filter_by(user_id=profile.id).order_by(SuggestionBatch.created_at.desc()).limit(2).all()
@@ -618,7 +620,7 @@ def register_mobile_api(app, db, User, Meal):
     from records_api import register_record_routes
     with app.app_context():
         register_record_routes(api, db, User, Meal, Details, Draft, Timing,
-            dict(body=body, user=user, day=day, meal_date=meal_date, serialize=serialize,
+            dict(body=body, user=user, day=day, meal_date=meal_date, serialize=serialize, summarize=summaries,
                  timing_input=timing_input, store_timing=store_timing, signature=meal_signature))
     app.extensions["mobile_timing_model"] = Timing
     app.register_blueprint(api)

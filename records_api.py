@@ -272,14 +272,16 @@ def register_record_routes(api, db, User, Meal, Details, Draft, Timing, services
     def summaries():
         profile = user(request.args.get("user_id"))
         local_zone, first, last, begin, end = date_range()
-        records = Meal.query.filter(Meal.user_id == profile.id, Meal.date >= begin, Meal.date < end).order_by(Meal.date).all()
+        query = Meal.query.filter(Meal.user_id == profile.id, Meal.date >= begin, Meal.date < end).order_by(Meal.date)
+        include_meals = request.args.get("include_meals") == "true"
+        records = ([serialize(m) for m in query.all()] if include_meals else services["summarize"](query, full_analysis=True))
         weights = BodyWeight.query.filter(BodyWeight.user_id == profile.id, BodyWeight.recorded_at >= begin, BodyWeight.recorded_at < end).all()
         days = []
         current = first
         while current <= last:
             key = current.date().isoformat()
-            meals = [m for m in records if meal_timing.local_time(m.date, str(local_zone)).date().isoformat() == key]
-            serialized = [serialize(m) for m in meals]
+            meals = [m for m in records if meal_timing.local_time(datetime.fromisoformat(m["date"].removesuffix("Z")), str(local_zone)).date().isoformat() == key]
+            serialized = meals
             scored = [m for m in serialized if m["analysis"] and m["analysis"].get("score")]
             versions = {}
             for meal in scored:
@@ -292,7 +294,7 @@ def register_record_routes(api, db, User, Meal, Details, Draft, Timing, services
             pattern = by_version[0]["value"] if len(by_version) == 1 else None
             discipline = min(m["discipline"]["value"] for m in serialized) if meals else None
             known_fiber = [m["analysis"]["totals"]["fiber"] for m in serialized if m["analysis"] and "fiber" in m["analysis"].get("totals", {})]
-            totals = {n: round(sum(getattr(m, n) for m in meals), 2) for n in ("calories", "protein", "carbs", "fat")}
+            totals = {n: round(sum(m[n] for m in meals), 2) for n in ("calories", "protein", "carbs", "fat")}
             totals["fiber"] = round(sum(known_fiber), 2) if known_fiber else None
             days.append(dict(date=key, meal_count=len(meals),
                 totals=totals, fiber_meals_with_data=len(known_fiber),

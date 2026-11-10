@@ -159,6 +159,17 @@ class MobileTests(unittest.TestCase):
         self.assertEqual(db.session.get(Meal, old.id).image_data, encoded)
         self.assertEqual(self.client.get(path + "?size=invalid", headers=self.headers).status_code, 400)
 
+    def test_reports_and_ideas_do_not_hash_photo_payloads(self):
+        self.save(self.start())
+        with patch("analysis_engine.fingerprint", side_effect=AssertionError("Reports must not hash photos")):
+            response = self.client.get(f"/api/v2/summaries?user_id={self.a.id}&date=2026-11-09&timezone=Europe/Bucharest", headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(response.json["days"][0]["totals"]["calories"], 130)
+            self.assertEqual(response.json["days"][0]["totals"]["fiber"], 2)
+            self.assertNotIn("image_data", response.json["days"][0]["meals"][0])
+            ideas = self.post("/suggestions", dict(user_id=self.a.id, request_key=str(uuid.uuid4())))
+            self.assertEqual(ideas.status_code, 201, ideas.json)
+
     def rpc(self, method, params=None):
         return self.client.post("/mcp", headers=self.headers, json=dict(jsonrpc="2.0", id=1, method=method, params=params or {}))
 

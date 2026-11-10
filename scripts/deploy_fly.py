@@ -1,6 +1,7 @@
 """Deploy the existing single-volume app without exporting data or credentials."""
 import base64
 import copy
+import gzip
 import json
 import os
 from pathlib import Path
@@ -48,8 +49,8 @@ def remote(machine_id, *args):
             with urlopen(ORIGIN + "/", timeout=10): pass
         except Exception: pass
     keep_awake()
-    source = (ROOT / "scripts/fly_sqlite_guard.py").read_bytes()
-    expression = "exec(__import__('base64').b64decode('" + base64.b64encode(source).decode() + "'))"
+    source = gzip.compress((ROOT / "scripts/fly_sqlite_guard.py").read_bytes())
+    expression = "exec(__import__('gzip').decompress(__import__('base64').b64decode('" + base64.b64encode(source).decode() + "')))"
     result_path = "/tmp/meal-deploy-" + uuid.uuid4().hex + ".json"
     # Fly's HTTP exec gateway can time out before its command timeout. Run the
     # potentially long backup/provider check privately, then poll a small result.

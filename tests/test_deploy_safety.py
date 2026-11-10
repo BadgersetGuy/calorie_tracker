@@ -15,6 +15,16 @@ from scripts import deploy_fly, fly_sqlite_guard as guard
 
 
 class DeploymentSafetyTests(unittest.TestCase):
+    def test_actual_remote_helper_fits_the_fly_exec_payload_limit(self):
+        calls = []
+        def fly(args, **kwargs):
+            calls.append(args)
+            self.assertLess(len(args[3].encode()), 16000)
+            output = {} if len(calls) == 1 else dict(exit_code=0, stdout=json.dumps(dict(integrity="ok")))
+            return json.dumps(dict(exit_code=0, stdout=json.dumps(output)))
+        with patch.object(deploy_fly, "run", side_effect=fly), patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", side_effect=OSError):
+            self.assertEqual(deploy_fly.remote("local-machine", "model"), {"integrity": "ok"})
+
     def test_rollout_requires_a_distinct_household_secret_before_fly_operations(self):
         for household in ("", "short", "deployment-secret-" * 3):
             with patch.dict(os.environ, FLY_API_TOKEN="deployment-secret-" * 3, MOBILE_API_TOKEN=household), patch.object(deploy_fly, "run") as fly:
