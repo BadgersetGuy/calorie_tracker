@@ -37,3 +37,12 @@ Compression checks cover detailed/high-resolution camera photos, the 1280-pixel/
 limit, EXIF removal/orientation, byte-identical repeated normalization, legacy ingest,
 compression on meal copy without rewriting the source, and dry-run/apply maintenance
 without nutrition/score changes. Android uses software-decoded bitmaps for JPEG encoding.
+
+
+Pre-deployment dependency update (10 November 2026): Flask 3.1.3, Werkzeug 3.1.9,
+Pillow 13.0.0, requests 2.34.2, python-dotenv 1.2.4 and Gunicorn 26.2.0. All 65 tests
+pass with these versions. pip-audit reports no known vulnerabilities in the updated
+local Python environment; this is not an OS/container-image vulnerability assessment.
+Gunicorn HTTP smoke checks on a temporary database pass for health, rejected unauthenticated
+access, and authenticated profile access. The container build upgrades pip to 26.3.
+Production backup and deployment still require Fly CLI deployment credentials.
