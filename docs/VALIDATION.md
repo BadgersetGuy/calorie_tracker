@@ -1,8 +1,8 @@
 # Validation record
 
-9 November 2026, against public repository base `7ea45b8`.
+Updated 10 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 57 tests passed, temporary SQLite database.
+- `python -m unittest discover -s tests -q`: 65 tests passed, temporary SQLite database.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
@@ -31,3 +31,9 @@ manual nutrition, multipart/photo references, attachment restrictions, authentic
 revision conflicts, body-weight CRUD, daily summary coverage and profile isolation.
 The generated OpenAPI contract validates and covers every mobile API operation.
 No live Custom GPT or MCP handoff has been run; the Codex skill is prepared, not installed.
+
+
+Compression checks cover detailed/high-resolution camera photos, the 1280-pixel/200-KiB
+limit, EXIF removal/orientation, byte-identical repeated normalization, legacy ingest,
+compression on meal copy without rewriting the source, and dry-run/apply maintenance
+without nutrition/score changes. Android uses software-decoded bitmaps for JPEG encoding.

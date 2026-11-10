@@ -7,8 +7,11 @@ from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 import base64
 import logging
+import click
+import json
 from sqlalchemy import inspect
 from sqlalchemy import text
+from analysis_engine import normalize_photo
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +78,12 @@ def upgrade_legacy_schema():
                     connection.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" FLOAT'))
                     logger.info('Added nullable column %s.%s', table, column)
     print('Legacy schema is ready. Existing meals, scores and targets were preserved.')
+
+@app.cli.command('compress-photos')
+@click.option('--apply', is_flag=True, help='Replace smaller photo payloads after backing up the database. Default is dry run.')
+def compress_photos(apply):
+    from photo_maintenance import compress_existing_photos
+    print(json.dumps(compress_existing_photos(db, apply=apply), indent=2))
 
 
 def analyze_image_with_openai(image_data, weight=None, meal_details=None):
@@ -202,7 +211,7 @@ def upload_meal():
                 # Read and encode the image
                 file_data = file.read()
                 logger.debug(f"Read file data (size: {len(file_data)} bytes)")
-                image_data = base64.b64encode(file_data).decode('utf-8')
+                image_data = normalize_photo(base64.b64encode(file_data).decode('utf-8'))
                 logger.debug(f"Encoded image to base64 (length: {len(image_data)})")
 
                 # Analyze image with OpenAI
@@ -217,6 +226,8 @@ def upload_meal():
                     'analysis': analysis_result,
                     'image_data': image_data
                 })
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
             except Exception as e:
                 logger.error(f"Error processing file: {str(e)}")
                 return jsonify({'error': f'Error processing image: {str(e)}'}), 500
@@ -246,13 +257,16 @@ def save_meal():
             carbs=data['carbs'],
             fat=data['fat'],
             psoriasis_score=data.get('psoriasis_score'),
-            image_data=data.get('image_data')
+            image_data=normalize_photo(data.get('image_data'))
         )
 
         db.session.add(new_meal)
         db.session.commit()
 
         return jsonify({'success': True})
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error saving meal: {str(e)}")

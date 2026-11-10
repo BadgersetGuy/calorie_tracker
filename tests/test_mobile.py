@@ -75,9 +75,11 @@ class MobileTests(unittest.TestCase):
         self.assertEqual(next(p for p in updated if p["id"] == self.a.id)["targets"]["calories"], 2100)
 
     def test_historical_score_survives_copy_and_reanalysis(self):
+        image = io.BytesIO(); Image.new("RGB", (20, 20), "green").save(image, "JPEG")
+        original_photo = base64.b64encode(image.getvalue()).decode()
         original = Meal(user_id=self.a.id, date=datetime(2025, 5, 6, 12), weight=200,
             description="Old oats", calories=130, protein=5.5, carbs=17, fat=4.5,
-            psoriasis_score=8.2, image_data="original-photo")
+            psoriasis_score=8.2, image_data=original_photo)
         db.session.add(original); db.session.commit()
         copied = self.post(f"/meals/{original.id}/copy", dict(user_id=self.b.id, portion_percent=70,
             date="2026-11-09T12:00:00Z", request_key=str(uuid.uuid4())))
@@ -89,7 +91,7 @@ class MobileTests(unittest.TestCase):
         revised = self.save(draft, replace_meal_id=original.id)
         self.assertEqual(revised.json["legacy_psoriasis_score"], 8.2)
         self.assertEqual(revised.json["analysis"]["score"]["value"], 75)
-        self.assertEqual(revised.json["image_data"], "original-photo")
+        self.assertEqual(revised.json["image_data"], original_photo)
         self.assertEqual(revised.json["date"], "2025-05-06T12:00:00Z")
 
     def test_legacy_delete_removes_mobile_metadata(self):
@@ -255,7 +257,7 @@ class CalculationTests(unittest.TestCase):
         buffer = io.BytesIO(); Image.new("RGB", (1800, 900)).save(buffer, "PNG")
         normalized = engine.normalize_photo(base64.b64encode(buffer.getvalue()).decode())
         photo = Image.open(io.BytesIO(base64.b64decode(normalized)))
-        self.assertEqual(photo.format, "JPEG"); self.assertEqual(photo.size, (1600, 800))
+        self.assertEqual(photo.format, "JPEG"); self.assertEqual(photo.size, (1280, 640))
 
     def test_provider_receives_photo_and_schema_and_no_storage(self):
         payload = result()

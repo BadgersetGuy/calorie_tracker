@@ -217,7 +217,8 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         val resolver = getApplication<Application>().contentResolver
         val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
-                val factor = (1600.0 / maxOf(info.size.width, info.size.height)).coerceAtMost(1.0)
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val factor = (1280.0 / maxOf(info.size.width, info.size.height)).coerceAtMost(1.0)
                 decoder.setTargetSize((info.size.width * factor).toInt(), (info.size.height * factor).toInt())
             }
         } else {
@@ -246,10 +247,21 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
             if (rotated !== raw) raw.recycle()
             rotated
         }
-        val ratio = (1600.0 / maxOf(bitmap.width, bitmap.height)).coerceAtMost(1.0)
-        val resized = Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+        val ratio = (1280.0 / maxOf(bitmap.width, bitmap.height)).coerceAtMost(1.0)
+        var resized = Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
         val buffer = ByteArrayOutputStream()
-        resized.compress(Bitmap.CompressFormat.JPEG, 85, buffer)
+        var quality = 78
+        while (true) {
+            buffer.reset()
+            check(resized.compress(Bitmap.CompressFormat.JPEG, quality, buffer)) { "Could not encode this photo" }
+            if (buffer.size() <= 200 * 1024) break
+            if (quality > 62) quality -= 8
+            else {
+                val smaller = Bitmap.createScaledBitmap(resized, (resized.width * .8).toInt().coerceAtLeast(1), (resized.height * .8).toInt().coerceAtLeast(1), true)
+                if (resized !== bitmap) resized.recycle()
+                resized = smaller; quality = 78
+            }
+        }
         if (resized !== bitmap) resized.recycle()
         bitmap.recycle()
         Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP)

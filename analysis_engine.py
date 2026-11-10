@@ -12,6 +12,8 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 PROMPT_VERSION = "meal-2.0"
 SCORE_VERSION = "diet-pattern-1.0"
 MODEL = os.getenv("MEAL_ANALYSIS_MODEL", "gpt-6.1-sol")
+PHOTO_MAX_EDGE = 1280
+PHOTO_MAX_BYTES = 200 * 1024
 GROUPS = ["vegetables", "fruit", "legumes", "whole_grains", "nuts_seeds",
           "olive_oil", "fish", "processed_meat", "red_meat", "sweets",
           "refined_grains", "alcohol", "neutral"]
@@ -82,25 +84,45 @@ def positive(value, label, allow_zero=True, maximum=100000):
         raise ValueError(f"{label} is outside the allowed range")
     return result
 
-def normalize_photo(encoded):
+def normalize_photo(encoded, max_input_bytes=10 * 1024 * 1024):
     if not encoded:
         return None
     if not isinstance(encoded, str):
         raise ValueError("Photo must be a base64-encoded image")
     try:
         raw = base64.b64decode(encoded, validate=True)
-        if len(raw) > 10 * 1024 * 1024:
-            raise ValueError("Photo must be under 10 MB")
+        if len(raw) > max_input_bytes:
+            raise ValueError(f"Photo must be under {max_input_bytes // (1024 * 1024)} MB")
         with Image.open(io.BytesIO(raw)) as original:
-            if original.width * original.height > 30_000_000:
+            max_pixels = 60_000_000 if original.format == "JPEG" else 30_000_000
+            if original.width * original.height > max_pixels:
                 raise ValueError("Photo resolution is too large")
+            clean_jfif = all(name == "APP0" and value.startswith(b"JFIF\x00")
+                             for name, value in getattr(original, "applist", []))
+            if (original.format == "JPEG" and max(original.size) <= PHOTO_MAX_EDGE
+                    and len(raw) <= PHOTO_MAX_BYTES and clean_jfif
+                    and not original.getexif() and not any(name in original.info for name in ("exif", "icc_profile", "xmp", "comment"))):
+                original.load()  # Validate before preserving an already compact photo.
+                return encoded
+            # JPEG decoder downsampling avoids expanding a 48 MP camera photo in full.
+            original.draft("RGB", (PHOTO_MAX_EDGE, PHOTO_MAX_EDGE))
             image = ImageOps.exif_transpose(original).convert("RGB")
-            image.thumbnail((1600, 1600))
-            buffer = io.BytesIO()
-            image.save(buffer, format="JPEG", quality=85)
-        return base64.b64encode(buffer.getvalue()).decode()
+            image.info.clear()
+            image.thumbnail((PHOTO_MAX_EDGE, PHOTO_MAX_EDGE), Image.Resampling.LANCZOS)
+            for _ in range(8):
+                for quality in (78, 70, 62):
+                    buffer = io.BytesIO()
+                    image.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True, subsampling=2)
+                    if buffer.tell() <= PHOTO_MAX_BYTES:
+                        return base64.b64encode(buffer.getvalue()).decode()
+                image.thumbnail((max(1, int(image.width * .8)), max(1, int(image.height * .8))), Image.Resampling.LANCZOS)
+            raise ValueError("Photo could not be compressed within the storage limit")
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
         raise ValueError("Photo must be a valid image") from None
+
+def normalize_stored_photo(encoded):
+    """Older stored uploads had a 16 MB limit; apply today's policy on new copies."""
+    return normalize_photo(encoded, max_input_bytes=16 * 1024 * 1024)
 
 def calculate(result):
     if result["status"] == "clarify":

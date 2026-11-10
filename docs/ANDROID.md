@@ -176,3 +176,42 @@ log automatically. This feature works without a model API call.
 Body-weight history is available through the top-bar scale icon; log a new kg value,
 tap an entry to correct it, or delete it. It is shared with the chat API.
 See [CHAT_API.md](CHAT_API.md) for API reporting, chat logging and integration setup.
+
+
+## Photo size and storage
+
+Android downsizes photos before upload: maximum edge 1280 pixels, JPEG quality starting
+at 78, with adaptive quality/downsampling to stay within 200 KiB. The server applies
+and enforces the same 1280-pixel/200-KiB storage limit for Android, REST, GPT Action and
+legacy upload/save routes. EXIF orientation is applied before metadata is removed.
+Already-small, metadata-free JPEGs are preserved byte-for-byte, so repeated copies and
+reanalysis do not create extra generations of JPEG quality loss. Older large photos
+are compressed when newly copied/reused, leaving the original record untouched.
+
+A 200-KiB JPEG needs about 267 KiB as base64, plus database record overhead, per stored
+copy. Analysis drafts and separate meal copies can each hold a copy; this change does
+not implement cross-record deduplication. The original phone/gallery file is unaffected.
+JPEG camera files up to 60 megapixels use decoder downsampling to reduce peak memory;
+other formats retain the 30-megapixel input limit. Normal upload size limits still apply.
+
+### Optional cleanup of older photos
+
+After deploying, inspect potential savings without replacing photos:
+
+```
+flask --app app compress-photos
+```
+
+After a verified database backup and testing on a restored copy:
+
+```
+flask --app app compress-photos --apply
+```
+
+This scans saved meals and persisted analysis-draft photos. It only replaces a photo
+when the compressed base64 payload is smaller, skips invalid photos, and guards against
+concurrent photo changes. Nutrition, score values, targets and meal dates are unchanged.
+The dry run reports candidate payload savings, not an immediate reduction in SQLite file
+size: freed pages are reusable, and physically shrinking the file would need a separate,
+planned SQLite VACUUM. The command does not vacuum or silently rewrite historical photos
+on startup. It has not been run against production.

@@ -287,7 +287,7 @@ def register_mobile_api(app, db, User, Meal):
                 raise ValueError("Original meal not found")
             detail = db.session.get(Details, source.id)
             source_signature = meal_signature(source)
-            photo = photo or source.image_data
+            photo = photo or engine.normalize_stored_photo(source.image_data)
             previous = json.loads(detail.analysis) if detail and detail.analysis else {
                 "description": source.description, "weight": source.weight,
                 "totals": {n: getattr(source, n) for n in ("calories", "protein", "carbs", "fat")}}
@@ -391,7 +391,7 @@ def register_mobile_api(app, db, User, Meal):
             record = Meal(user_id=draft.user_id, date=utc)
         record.description = result["description"]
         record.weight = result["weight"]
-        record.image_data = draft.photo
+        record.image_data = engine.normalize_stored_photo(draft.photo)
         for nutrient in ("calories", "protein", "carbs", "fat"):
             setattr(record, nutrient, result["totals"][nutrient])
         db.session.add(record)
@@ -446,7 +446,7 @@ def register_mobile_api(app, db, User, Meal):
             analysis = engine.calculate(analysis)
         record = Meal(user_id=target.id, date=stamp, description=original.description,
             psoriasis_score=original.psoriasis_score,
-            image_data=original.image_data, weight=original.weight * factor,
+            image_data=engine.normalize_stored_photo(original.image_data), weight=original.weight * factor,
             **{n: getattr(original, n) * factor for n in ("calories", "protein", "carbs", "fat")})
         db.session.add(record)
         db.session.flush()
