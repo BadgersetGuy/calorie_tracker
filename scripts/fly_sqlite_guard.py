@@ -234,6 +234,10 @@ def verify(manifest, port, root="/data"):
     counts = inspect_database(path)
     if str(path) != saved["source_path"] or any(counts[name] < saved["counts"][name] for name in counts):
         raise RuntimeError("Database path or existing record counts changed unexpectedly")
+    with sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True) as connection:
+        plan = connection.execute("EXPLAIN QUERY PLAN SELECT id FROM meal WHERE user_id=? ORDER BY date DESC, id DESC LIMIT 3", (0,)).fetchall()
+        if not any("ix_meal_user_date_id" in row[-1] for row in plan):
+            raise RuntimeError("Indexed meal history query plan was not confirmed")
     token = os.getenv("MOBILE_API_TOKEN")
     if not token: raise RuntimeError("Household authentication is not configured")
     req = Request("http://127.0.0.1:" + str(port) + "/api/v2/profiles", headers={"Authorization": "Bearer " + token})

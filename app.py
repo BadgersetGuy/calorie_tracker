@@ -64,6 +64,8 @@ with app.app_context():
         if database_file and database_file != ':memory:':
             os.makedirs(os.path.dirname(os.path.abspath(database_file)), exist_ok=True)
     db.create_all()
+    # Profile/date lists and counts must not scan rows containing large legacy photos.
+    db.Index('ix_meal_user_date_id', Meal.user_id, Meal.date, Meal.id).create(db.engine, checkfirst=True)
 
 @app.cli.command('upgrade-legacy-schema')
 def upgrade_legacy_schema():

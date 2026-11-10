@@ -141,6 +141,12 @@ class MobileTests(unittest.TestCase):
         self.assertIn("revision", detail)
         self.assertEqual(detail["analysis"]["ingredients"], saved["analysis"]["ingredients"])
 
+    def test_history_and_profile_counts_use_a_covering_index(self):
+        for sql in ("SELECT id FROM meal WHERE user_id=1 ORDER BY date DESC, id DESC LIMIT 30", "SELECT count(*) FROM meal WHERE user_id=1"):
+            plan = db.session.execute(db.text("EXPLAIN QUERY PLAN " + sql)).all()
+            self.assertTrue(any("ix_meal_user_date_id" in row[-1] for row in plan), plan)
+            self.assertFalse(any("SCAN meal" in row[-1] for row in plan), plan)
+
     def test_photo_previews_are_small_and_do_not_rewrite_original(self):
         image = io.BytesIO(); Image.new("RGB", (2400, 1600), "green").save(image, "JPEG")
         encoded = base64.b64encode(image.getvalue()).decode()
