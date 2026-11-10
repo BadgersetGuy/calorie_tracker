@@ -16,6 +16,10 @@ claiming chat access. If the host lacks plugin installation/account-save capabil
 the connection remains pending; use a supported private-plugin flow or the Custom GPT
 Action setup below.
 
+The current adapter supports API-key/Bearer authentication, not OAuth. A host whose
+custom-MCP form only supports OAuth or No authentication needs an OAuth adapter before
+it can connect; selecting No authentication does not grant private diary access.
+
 Use a separate household token, not the Fly deployment credential. Configure the same
 random value (at least 32 characters) as the GitHub repository Actions secret
 `MOBILE_API_TOKEN` and in the Android/chat credential settings. The deployment workflow

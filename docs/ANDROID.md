@@ -10,8 +10,9 @@ Version 2.0.2 uses compact list responses, separate 192-pixel thumbnails and bou
 screens are cached in memory for 30 seconds (up to 16 pages), with an 8-MiB image cache;
 force refresh and mutations invalidate the appropriate data. Stale/cancelled reads do
 not replace another profile's screen. Opening Add meal makes no list request. No diary
-or image cache is persisted to disk. The server's existing sleep policy is preserved
-unless the owner explicitly chooses a warmer configuration.
+or image cache is persisted to disk. The owner selected one always-warm Fly Machine;
+idle stop is disabled and later deployments retain that policy. Profile/date lookups
+use a compound SQLite index instead of scanning the photo-heavy meal table.
 
 - Today, Add meal, History and Ideas; household profiles and daily targets.
 - Search all past meals, page through older results, or browse a specific date.
