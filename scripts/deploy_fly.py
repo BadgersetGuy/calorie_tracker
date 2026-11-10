@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
+import uuid
 from urllib.request import urlopen
 import tomli_w
 
@@ -43,14 +44,36 @@ def primary(items):
 def remote(machine_id, *args):
     source = (ROOT / "scripts/fly_sqlite_guard.py").read_bytes()
     expression = "exec(__import__('base64').b64decode('" + base64.b64encode(source).decode() + "'))"
-    command = shlex.join(["python", "-c", expression, *args])
-    response = json.loads(run(["machine", "exec", machine_id, command, "--timeout", "600", "--json"], timeout=660))
-    if response.get("exit_code", 0) != 0:
-        raise RuntimeError("Remote database/provider check failed; private remote output was not published")
-    result = json.loads(response["stdout"])
-    if result.get("guard_error"):
-        raise RuntimeError("Remote guard: " + result["guard_error"])
-    return result
+    result_path = "/tmp/meal-deploy-" + uuid.uuid4().hex + ".json"
+    # Fly's HTTP exec gateway can time out before its command timeout. Run the
+    # potentially long backup/provider check privately, then poll a small result.
+    worker = '''import json, os, subprocess, tempfile
+try:
+    process = subprocess.run(COMMAND, capture_output=True, text=True, timeout=540)
+    result = {"exit_code": process.returncode, "stdout": process.stdout}
+except Exception:
+    result = {"exit_code": 1, "stdout": ""}
+fd, temporary = tempfile.mkstemp(prefix="meal-deploy-", dir="/tmp")
+with os.fdopen(fd, "w") as stream:
+    json.dump(result, stream)
+os.replace(temporary, RESULT_PATH)
+'''.replace("COMMAND", repr(["python", "-c", expression, *args])).replace("RESULT_PATH", repr(result_path))
+    launch = "import subprocess; subprocess.Popen(['python', '-c', " + repr(worker) + "], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); print('{}')"
+    response = json.loads(run(["machine", "exec", machine_id, shlex.join(["python", "-c", launch]), "--json"], timeout=90))
+    if response.get("exit_code", 0): raise RuntimeError("Could not start the private remote check")
+    poll = "import json; from pathlib import Path; p=Path(" + repr(result_path) + "); result=json.loads(p.read_text()) if p.is_file() else None; p.unlink(missing_ok=True) if result is not None else None; print(json.dumps(result))"
+    for _ in range(120):
+        time.sleep(5)
+        response = json.loads(run(["machine", "exec", machine_id, shlex.join(["python", "-c", poll]), "--json"], timeout=90))
+        if response.get("exit_code", 0): raise RuntimeError("Could not read the private remote check")
+        completed = json.loads(response["stdout"])
+        if completed is None: continue
+        if completed["exit_code"]:
+            raise RuntimeError("Remote check failed; private remote output was not published")
+        result = json.loads(completed["stdout"])
+        if result.get("guard_error"): raise RuntimeError("Remote guard: " + result["guard_error"])
+        return result
+    raise RuntimeError("Private remote check timed out")
 
 def configuration(original, sha, model):
     config = copy.deepcopy(original)

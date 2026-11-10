@@ -3,7 +3,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -12,6 +14,17 @@ from scripts import deploy_fly, fly_sqlite_guard as guard
 
 
 class DeploymentSafetyTests(unittest.TestCase):
+    def test_remote_check_survives_a_detached_command_and_returns_private_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scripts = Path(folder) / "scripts"
+            scripts.mkdir()
+            (scripts / "fly_sqlite_guard.py").write_text('import json, time; time.sleep(.05); print(json.dumps({"integrity": "ok"}))')
+            def execute_locally(args, **kwargs):
+                process = subprocess.run(shlex.split(args[3]), text=True, capture_output=True, timeout=5)
+                return json.dumps(dict(exit_code=process.returncode, stdout=process.stdout))
+            with patch.object(deploy_fly, "ROOT", Path(folder)), patch.object(deploy_fly, "run", side_effect=execute_locally), patch.object(deploy_fly.time, "sleep"):
+                self.assertEqual(deploy_fly.remote("local-machine", "test"), {"integrity": "ok"})
+
     def test_online_backup_preserves_records_and_is_private(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "meals.db"
