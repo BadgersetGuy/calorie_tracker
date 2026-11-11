@@ -68,13 +68,15 @@ os.replace(temporary, RESULT_PATH)
     launch = "import subprocess; subprocess.Popen(['python', '-c', " + repr(worker) + "], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); print('{}')"
     response = json.loads(run(["machine", "exec", machine_id, shlex.join(["python", "-c", launch]), "--json"], timeout=90))
     if response.get("exit_code", 0): raise RuntimeError("Could not start the private remote check")
-    poll = "import json; from pathlib import Path; p=Path(" + repr(result_path) + "); print(p.read_text() if p.is_file() else 'null')"
+    quoted_path = shlex.quote(result_path)
+    # Polling must not start another Python interpreter on a 256-MiB app Machine.
+    poll = f"if test -f {quoted_path}; then cat {quoted_path}; else printf null; fi"
     failures = 0
     for _ in range(120):
         time.sleep(5)
         keep_awake()
         try:
-            response = json.loads(run(["machine", "exec", machine_id, shlex.join(["python", "-c", poll]), "--json"], timeout=90))
+            response = json.loads(run(["machine", "exec", machine_id, shlex.join(["sh", "-c", poll]), "--json"], timeout=90))
             failures = 0
         except RuntimeError as error:
             if any(value in str(error).lower() for value in ("deadline", "408", "502", "503", "connection reset")) and failures < 4:
@@ -88,8 +90,8 @@ os.replace(temporary, RESULT_PATH)
             raise RuntimeError("Remote check failed; private remote output was not published")
         result = json.loads(completed["stdout"])
         if result.get("guard_error"): raise RuntimeError("Remote guard: " + result["guard_error"])
-        cleanup = "from pathlib import Path; Path(" + repr(result_path) + ").unlink(missing_ok=True)"
-        try: run(["machine", "exec", machine_id, shlex.join(["python", "-c", cleanup]), "--json"], timeout=90)
+        cleanup = shlex.join(["rm", "-f", result_path])
+        try: run(["machine", "exec", machine_id, cleanup, "--json"], timeout=90)
         except RuntimeError: pass
         return result
     raise RuntimeError("Private remote check timed out")
