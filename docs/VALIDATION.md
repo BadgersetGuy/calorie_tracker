@@ -2,7 +2,7 @@
 
 Updated 10 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 85 tests passed, temporary SQLite database, including indexed query plans, compact lists without photo hashing, sized photo preservation, MCP authentication/discovery/validation/writes, transient Fly exec polling and lossless compressed backup verification.
+- `python -m unittest discover -s tests -q`: 89 tests passed, temporary SQLite database. Additional coverage includes backdated eating-day totals, unchanged fingerprints across chunked photo hashing, full 30-meal legacy pages with bounded previews/only one original loaded, and unreadable legacy photo handling.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).

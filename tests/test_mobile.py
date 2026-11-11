@@ -1,6 +1,8 @@
 import base64
 import copy
 import io
+import hashlib
+import json
 import os
 import tempfile
 import unittest
@@ -119,6 +121,71 @@ class MobileTests(unittest.TestCase):
         self.assertEqual(first.json["id"], second.json["id"])
         self.assertEqual(Meal.query.count(), 1)
         self.assertEqual(first.json["date"], "2026-11-09T10:00:00Z")
+
+    def test_backdated_meal_is_saved_and_reported_on_its_eating_day(self):
+        draft = self.start()
+        response = self.post(f"/analyses/{draft['id']}/save", dict(revision=draft["revision"],
+            eaten_at="2026-11-10T17:30:00+02:00", timezone="Europe/Bucharest"))
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertEqual(response.json["date"], "2026-11-10T15:30:00Z")
+        self.assertEqual(response.json["discipline"]["value"], 10)
+        yesterday = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-10&offset_minutes=120&view=summary", headers=self.headers).json
+        today = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-11&offset_minutes=120&view=summary", headers=self.headers).json
+        self.assertEqual([meal["id"] for meal in yesterday], [response.json["id"]])
+        self.assertEqual(today, [])
+        summary = self.client.get(f"/api/v2/summaries?user_id={self.a.id}&date=2026-11-10&timezone=Europe/Bucharest", headers=self.headers).json
+        self.assertEqual(summary["days"][0]["totals"]["calories"], 130)
+
+    def test_streamed_photo_fingerprint_preserves_existing_revision_values(self):
+        context = dict(text="Cappuccino", previous=dict(grams=125.5, name="Milk"), conversation=[])
+        for photo in (None, "", "a" * (1024 * 1024 + 20), 'quotes"\\\n' + "î🙂"):
+            previous = hashlib.sha256(json.dumps([context, photo, engine.MODEL, engine.PROMPT_VERSION, engine.SCORE_VERSION], sort_keys=True).encode()).hexdigest()
+            self.assertEqual(engine.fingerprint(context, photo), previous)
+
+    def test_full_history_page_uses_small_previews_and_keeps_originals(self):
+        source = io.BytesIO()
+        Image.frombytes("RGB", (1600, 1200), os.urandom(1600 * 1200 * 3)).save(source, "JPEG", quality=92)
+        encoded = base64.b64encode(source.getvalue()).decode()
+        profile_id = self.a.id
+        for index in range(30):
+            db.session.add(Meal(user_id=profile_id, date=datetime(2026, 11, 10, 12), description="Meal " + str(index),
+                weight=100, calories=100, protein=5, carbs=15, fat=2, image_data=encoded))
+        db.session.commit(); db.session.expunge_all()
+        from sqlalchemy import event
+        loaded = []
+        def on_photo_refresh(record, context, attributes):
+            if "image_data" in attributes:
+                loaded.append(sum(isinstance(obj, Meal) and "image_data" in obj.__dict__ for obj in db.session.identity_map.values()))
+        event.listen(Meal, "refresh", on_photo_refresh)
+        try:
+            response = self.client.get(f"/api/v2/history?user_id={profile_id}", headers=self.headers)
+        finally:
+            event.remove(Meal, "refresh", on_photo_refresh)
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(len(response.json["meals"]), 30)
+        self.assertTrue(loaded)
+        self.assertLessEqual(max(loaded), 1)
+        for meal in response.json["meals"]:
+            preview = base64.b64decode(meal["image_data"])
+            self.assertLessEqual(len(preview), 48 * 1024)
+            self.assertLessEqual(max(Image.open(io.BytesIO(preview)).size), 640)
+            self.assertEqual(meal["calories"], 100)
+            self.assertIn("revision", meal)
+        first_id = response.json["meals"][0]["id"]
+        original = self.client.get(f"/api/v2/meals/{first_id}/photo", headers=self.headers)
+        self.assertEqual(original.data, source.getvalue())
+
+    def test_unreadable_legacy_photo_does_not_hide_meal_history(self):
+        record = Meal(user_id=self.a.id, date=datetime(2026, 11, 10), description="Legacy meal",
+            weight=100, calories=100, protein=5, carbs=15, fat=2, image_data="broken-photo")
+        db.session.add(record); db.session.commit()
+        path = f"/api/v2/history?user_id={self.a.id}"
+        response = self.client.get(path, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json["meals"][0]["image_data"])
+        with patch("mobile_api.photo_bytes", side_effect=engine.Image.DecompressionBombError("Too large")):
+            self.assertEqual(self.client.get(path, headers=self.headers).status_code, 200)
+        self.assertEqual(db.session.get(Meal, record.id).image_data, "broken-photo")
 
     def test_summary_lists_skip_photos_fingerprints_and_full_ingredients(self):
         image = io.BytesIO(); Image.new("RGB", (1800, 1200), "green").save(image, "JPEG")

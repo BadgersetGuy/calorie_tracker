@@ -5,6 +5,16 @@ The Flask server retains the database, photos, analysis credentials, and househo
 
 ## What is implemented
 
+To backfill a forgotten meal, open **Add meal**, tap the date under **Eating time**,
+choose the previous day and set the actual time eaten. The saved meal and its timing
+score belong to that eating date. Open **History → By date** to find it. The date/time
+picker in **Log again / copy** also supports past days. This does not require a new APK.
+
+History responses for older Android builds now contain display previews (up to 640
+pixels and 48 KiB JPEG per photo). Originals are fetched one at a time and released
+after each row, avoiding whole-page photo memory growth on the server. The stored
+original remains unchanged and available through the authenticated photo endpoint.
+
 Version 2.0.2 uses compact list responses, separate 192-pixel thumbnails and bounded
 1280-pixel previews. Photo decoding happens off the main thread. Recent profile/date
 screens are cached in memory for 30 seconds (up to 16 pages), with an 8-MiB image cache;

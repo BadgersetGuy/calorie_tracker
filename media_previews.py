@@ -12,11 +12,13 @@ _cache = OrderedDict()
 _lock = threading.Lock()
 
 def photo_bytes(encoded, size="original"):
-    if size not in ("original", "thumbnail", "preview"):
+    if size not in ("original", "thumbnail", "preview", "list"):
         raise ValueError("Photo size must be original, thumbnail or preview")
     if size == "original":
         return base64.b64decode(encoded)
-    key = (hashlib.sha256(encoded.encode("ascii")).hexdigest(), size)
+    digest = hashlib.sha256()
+    for offset in range(0, len(encoded), 1024 * 1024): digest.update(encoded[offset:offset + 1024 * 1024].encode("ascii"))
+    key = (digest.hexdigest(), size)
     with _lock:
         if key in _cache:
             _cache.move_to_end(key)
@@ -27,13 +29,19 @@ def photo_bytes(encoded, size="original"):
         with Image.open(io.BytesIO(base64.b64decode(encoded))) as original:
             if original.width * original.height > 60_000_000:
                 raise ValueError("Photo resolution is too large")
-            original.draft("RGB", (192, 192))
+            edge = 640 if size == "list" else 192
+            original.draft("RGB", (edge, edge))
             image = ImageOps.exif_transpose(original).convert("RGB")
-            image.thumbnail((192, 192), Image.Resampling.LANCZOS)
+            image.thumbnail((edge, edge), Image.Resampling.LANCZOS)
             image.info.clear()
-            output = io.BytesIO()
-            image.save(output, "JPEG", quality=65, optimize=True)
-            value = output.getvalue()
+            while True:
+                for quality in (65, 55, 45):
+                    output = io.BytesIO()
+                    image.save(output, "JPEG", quality=quality, optimize=True)
+                    value = output.getvalue()
+                    if len(value) <= 48 * 1024: break
+                if len(value) <= 48 * 1024: break
+                image.thumbnail((max(1, int(image.width * .8)), max(1, int(image.height * .8))), Image.Resampling.LANCZOS)
     with _lock:
         _cache[key] = value
         _cache.move_to_end(key)

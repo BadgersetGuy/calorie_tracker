@@ -4,6 +4,11 @@ on:
     branches: [codex/android-meal-tracker]
     paths: [.github/workflows/diagnose-history.yml]
   workflow_dispatch:
+    inputs:
+      full_legacy_page:
+        description: Check the full older-Android page after the bounded-memory fix is deployed
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -14,6 +19,7 @@ jobs:
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       MOBILE_API_TOKEN: ${{ secrets.MOBILE_API_TOKEN }}
+      CHECK_FULL_HISTORY: ${{ inputs.full_legacy_page && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master

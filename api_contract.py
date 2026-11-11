@@ -92,7 +92,7 @@ def build_openapi(app):
                     params.append(dict(name="size", **{"in": "query"}, schema=dict(type="string", enum=["original", "thumbnail", "preview"]), description="Thumbnail is at most 192 pixels; preview uses the current 1280-pixel/200-KiB policy. The stored original is not modified."))
                 if short == "/analyses/{draft_id}": params.append(dict(name="include_context", **{"in": "query"}, schema={"type": "boolean"}))
             if "/photo" not in short and (short.startswith("/meals") or short in ("/history", "/summaries", "/analyses/{draft_id}/save")):
-                params.append(dict(name="include_images", **{"in": "query"}, schema={"type": "boolean", "default": False}, description="False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."))
+                params.append(dict(name="include_images", **{"in": "query"}, schema={"type": "boolean", "default": False}, description="False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."))
             if params: operation["parameters"] = params
             schema = REQUESTS.get((short, verb))
             if schema:

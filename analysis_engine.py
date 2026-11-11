@@ -210,4 +210,20 @@ def analyze(context, photo):
     return result
 
 def fingerprint(context, photo):
-    return hashlib.sha256(json.dumps([context, photo, MODEL, PROMPT_VERSION, SCORE_VERSION], sort_keys=True).encode()).hexdigest()
+    # Preserve the exact existing revision/cache digest without allocating a second
+    # whole JSON copy of a potentially large historical base64 photo.
+    digest = hashlib.sha256()
+    digest.update(b"[")
+    digest.update(json.dumps(context, sort_keys=True).encode())
+    digest.update(b", ")
+    if isinstance(photo, str):
+        digest.update(b'"')
+        for offset in range(0, len(photo), 1024 * 1024):
+            digest.update(json.dumps(photo[offset:offset + 1024 * 1024])[1:-1].encode())
+        digest.update(b'"')
+    else:
+        digest.update(json.dumps(photo, sort_keys=True).encode())
+    for value in (MODEL, PROMPT_VERSION, SCORE_VERSION):
+        digest.update(b", "); digest.update(json.dumps(value).encode())
+    digest.update(b"]")
+    return digest.hexdigest()

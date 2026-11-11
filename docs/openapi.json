@@ -247,7 +247,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ]
       },
@@ -289,7 +289,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ],
         "requestBody": {
@@ -475,7 +475,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ]
       }
@@ -524,7 +524,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ]
       },
@@ -571,7 +571,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ]
       },
@@ -618,7 +618,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ],
         "requestBody": {
@@ -1143,7 +1143,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ],
         "requestBody": {
@@ -1227,7 +1227,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ],
         "requestBody": {
@@ -1996,7 +1996,7 @@
               "type": "boolean",
               "default": false
             },
-            "description": "False keeps chat responses compact. Fetch a stored photo through the authenticated photo endpoint."
+            "description": "False keeps chat responses compact. Inline images in meal lists are bounded display previews; fetch the stored original through the authenticated photo endpoint."
           }
         ]
       }

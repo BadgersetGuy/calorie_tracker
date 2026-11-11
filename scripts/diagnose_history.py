@@ -48,6 +48,8 @@ for profile in profiles:
     prefix = "/api/v2/history?user_id=" + str(profile["id"])
     get(prefix + "&view=summary&limit=30", "history_summary_page")
     get(prefix + "&limit=3", "history_legacy_small_page")
+    if os.getenv("CHECK_FULL_HISTORY") == "true":
+        get(prefix + "&limit=30", "history_legacy_full_page")
 
 # Classify recent worker failures without disclosing raw application logs.
 try:

@@ -1,5 +1,6 @@
 """Additive Android API. Existing user/meal records are reused, never recreated."""
 import copy
+import base64
 from datetime import datetime, timedelta, timezone
 import hmac
 import json
@@ -15,6 +16,7 @@ import analysis_engine as engine
 import meal_timing
 import meal_suggestions
 from photo_inputs import photo_from_request
+from media_previews import photo_bytes
 
 
 def register_mobile_api(app, db, User, Meal):
@@ -144,24 +146,40 @@ def register_mobile_api(app, db, User, Meal):
             raise ValueError("Text is too long or invalid")
         return value.strip()
 
-    def serialize(meal):
+    def serialize(meal, list_photo=False):
         detail = db.session.get(Details, meal.id)
         timing = db.session.get(Timing, meal.id)
         discipline = json.loads(timing.score_data) if timing else meal_timing.score(meal_timing.local_time(meal.date), inferred=True)
+        include_photo = request.args.get("include_images") == "true" or (request.args.get("include_images") != "false" and request.headers.get("X-Meal-Client") == "android")
+        image = meal.image_data if include_photo else None
+        if image and list_photo:
+            try: image = base64.b64encode(photo_bytes(image, "list")).decode()
+            except (ValueError, OSError, engine.Image.DecompressionBombError): image = None
         return dict(id=meal.id, user_id=meal.user_id, date=meal.date.isoformat() + "Z",
                     weight=meal.weight, description=meal.description or "Meal",
                     calories=meal.calories, protein=meal.protein, carbs=meal.carbs,
-                    fat=meal.fat, image_data=meal.image_data if (request.args.get("include_images") == "true" or (request.args.get("include_images") != "false" and request.headers.get("X-Meal-Client") == "android")) else None,
+                    fat=meal.fat, image_data=image,
                     has_photo=bool(meal.image_data), revision=meal_signature(meal),
                     legacy_psoriasis_score=meal.psoriasis_score,
                     discipline=discipline,
                     analysis=json.loads(detail.analysis) if detail and detail.analysis else None,
                     source_meal_id=detail.source_meal_id if detail else None)
 
-    def summaries(query, full_analysis=False):
+    def serialize_page(query):
+        results = []
+        # Older Android builds expect inline photos. Fetch one original at a time,
+        # return a bounded display preview, then release the large deferred column.
+        for record in query.options(defer(Meal.image_data)).all():
+            try: results.append(serialize(record, list_photo=True))
+            finally: db.session.expire(record, ["image_data"])
+        return results
+
+    def summaries(query, full_analysis=False, profile_id=None):
         # Avoid selecting large historical photos, hashing them for revisions, or
         # running per-row metadata queries merely to draw a list.
-        rows = query.options(defer(Meal.image_data)).add_columns(Meal.image_data.isnot(None)).all()
+        fields = [defer(Meal.image_data)]
+        if profile_id is not None: fields.append(defer(Meal.user_id))
+        rows = query.options(*fields).add_columns(Meal.image_data.isnot(None)).all()
         ids = [meal.id for meal, _ in rows]
         details = {d.meal_id: d for d in Details.query.filter(Details.meal_id.in_(ids)).all()} if ids else {}
         timings = {t.meal_id: t for t in Timing.query.filter(Timing.meal_id.in_(ids)).all()} if ids else {}
@@ -169,7 +187,7 @@ def register_mobile_api(app, db, User, Meal):
         for meal, photo in rows:
             detail, timing = details.get(meal.id), timings.get(meal.id)
             analysis = json.loads(detail.analysis) if detail and detail.analysis else None
-            result.append(dict(id=meal.id, user_id=meal.user_id, date=meal.date.isoformat() + "Z",
+            result.append(dict(id=meal.id, user_id=profile_id if profile_id is not None else meal.user_id, date=meal.date.isoformat() + "Z",
                 weight=meal.weight, description=meal.description or "Meal", calories=meal.calories,
                 protein=meal.protein, carbs=meal.carbs, fat=meal.fat, has_photo=bool(photo),
                 legacy_psoriasis_score=meal.psoriasis_score,
@@ -259,7 +277,7 @@ def register_mobile_api(app, db, User, Meal):
         start = date - timedelta(minutes=offset)
         records = Meal.query.filter(Meal.user_id == profile.id, Meal.date >= start,
                 Meal.date < start + timedelta(days=1)).order_by(Meal.date.desc())
-        return jsonify(summaries(records) if request.args.get("view") == "summary" else [serialize(record) for record in records.all()])
+        return jsonify(summaries(records, profile_id=profile.id) if request.args.get("view") == "summary" else serialize_page(records))
 
     @api.get("/history")
     def history():
@@ -276,7 +294,7 @@ def register_mobile_api(app, db, User, Meal):
             records = records.filter(Meal.description.contains(query, autoescape=True))
         total = records.count()
         page = records.order_by(Meal.date.desc(), Meal.id.desc()).offset(offset).limit(limit)
-        return jsonify(meals=summaries(page) if request.args.get("view") == "summary" else [serialize(record) for record in page.all()], total=total)
+        return jsonify(meals=summaries(page, profile_id=profile.id) if request.args.get("view") == "summary" else serialize_page(page), total=total)
 
     @api.get("/meals/<int:meal_id>")
     def get_meal(meal_id):

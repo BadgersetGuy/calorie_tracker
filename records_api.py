@@ -181,7 +181,10 @@ def register_record_routes(api, db, User, Meal, Details, Draft, Timing, services
         record = db.session.get(Meal, meal_id)
         if not record or not record.image_data:
             return jsonify(error="No photo is stored for this meal"), 404
-        return Response(photo_bytes(record.image_data, request.args.get("size", "original")), mimetype="image/jpeg",
+        size = request.args.get("size", "original")
+        if size not in ("original", "thumbnail", "preview"):
+            raise ValueError("Photo size must be original, thumbnail or preview")
+        return Response(photo_bytes(record.image_data, size), mimetype="image/jpeg",
             headers={"Cache-Control": "private, no-store"})
 
     @api.patch("/profiles/<int:profile_id>")
@@ -274,7 +277,7 @@ def register_record_routes(api, db, User, Meal, Details, Draft, Timing, services
         local_zone, first, last, begin, end = date_range()
         query = Meal.query.filter(Meal.user_id == profile.id, Meal.date >= begin, Meal.date < end).order_by(Meal.date)
         include_meals = request.args.get("include_meals") == "true"
-        records = ([serialize(m) for m in query.all()] if include_meals else services["summarize"](query, full_analysis=True))
+        records = ([serialize(m) for m in query.all()] if include_meals else services["summarize"](query, full_analysis=True, profile_id=profile.id))
         weights = BodyWeight.query.filter(BodyWeight.user_id == profile.id, BodyWeight.recorded_at >= begin, BodyWeight.recorded_at < end).all()
         days = []
         current = first
