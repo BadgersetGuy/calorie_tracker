@@ -74,7 +74,7 @@ class DeploymentSafetyTests(unittest.TestCase):
             def execute_locally(args, **kwargs):
                 process = subprocess.run(shlex.split(args[3]), text=True, capture_output=True, timeout=5)
                 return json.dumps(dict(exit_code=process.returncode, stdout=process.stdout))
-            with patch.object(deploy_fly, "ROOT", Path(folder)), patch.object(deploy_fly, "run", side_effect=execute_locally), patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", side_effect=OSError):
+            with patch.object(deploy_fly, "ROOT", Path(folder)), patch.object(deploy_fly, "run", side_effect=execute_locally), patch.object(deploy_fly, "urlopen", side_effect=OSError):
                 self.assertEqual(deploy_fly.remote("local-machine", "test"), {"integrity": "ok"})
 
     def test_identical_backups_share_bytes_but_keep_all_restore_manifests(self):
