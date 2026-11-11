@@ -28,7 +28,7 @@ def oom_count(value):
 
 if os.getenv("METADATA_ONLY") == "true":
     releases = fly(["releases", "--image"])
-    print(json.dumps(dict(check="releases", releases=releases)))
+    print(json.dumps(dict(check="releases", releases=[{key: value for key, value in release.items() if key.lower() in ("id", "version", "status", "image_ref", "image", "created_at")} for release in releases])))
 
 for machine in fly(["machine", "list"]):
     status = fly(["machine", "status", machine["id"]], as_json=False).lower()
