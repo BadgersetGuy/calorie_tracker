@@ -79,7 +79,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
         },
         bottomBar = {
             if (vm.connected) NavigationBar {
-                listOf("Today" to Icons.Outlined.Today, "Add meal" to Icons.Outlined.AddCircleOutline, "History" to Icons.Outlined.History, "Ideas" to Icons.Outlined.Lightbulb).forEachIndexed { index, pair ->
+                listOf("Today" to Icons.Outlined.Today, "Add meal" to Icons.Outlined.AddCircleOutline, "History" to Icons.Outlined.History, "Ideas" to Icons.Outlined.Lightbulb, "Trends" to Icons.Outlined.ShowChart).forEachIndexed { index, pair ->
                     NavigationBarItem(selected = vm.tab == index, onClick = { vm.navigate(index) }, enabled = !vm.busy,
                         icon = { Icon(pair.second, pair.first) }, label = { Text(pair.first) })
                 }
@@ -102,6 +102,7 @@ fun MealApp(vm: MealViewModel = viewModel()) {
                 EmptyState("Make room for both of you", "Create a profile for each person to keep meals and targets separate.", "Create profile") { showProfiles = true }
             } else when (vm.tab) {
                 1 -> AddMeal(vm)
+                4 -> TrendsScreen(vm)
                 3 -> MealIdeas(vm)
                 else -> MealList(vm, onTargets = { showTargets = true })
             }
@@ -181,6 +182,7 @@ fun MealList(vm: MealViewModel, onTargets: () -> Unit) {
                         if (goal > 0) LinearProgressIndicator(progress = { (totals.optDouble("calories") / goal).toFloat().coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
                     }
                     MacroRow(totals)
+                    vm.daySummary?.let { ScoreAverages(it) }
                     val timings = vm.meals.mapNotNull { it.optJSONObject("discipline") }
                     if (timings.isNotEmpty()) Text("Discipline for day: ${timings.minOf { it.getInt("value") }}/10 · 18:00 cutoff${if (timings.any { it.optBoolean("inferred") }) " · includes inferred times" else ""}", style = MaterialTheme.typography.bodySmall)
                     if (!history) TextButton(onClick = onTargets, enabled = !vm.busy) { Text("Edit daily targets") }

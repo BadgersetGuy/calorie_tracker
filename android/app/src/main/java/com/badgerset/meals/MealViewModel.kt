@@ -13,6 +13,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,9 +58,13 @@ private class TokenVault {
 }
 
 class MealViewModel(application: Application) : AndroidViewModel(application) {
-    private data class MealPage(val meals: List<JSONObject>, val total: Int, val loadedAt: Long)
+    private data class MealPage(val meals: List<JSONObject>, val total: Int, val loadedAt: Long, val summary: JSONObject? = null)
     private data class PhotoEntry(val bitmap: Bitmap, val loadedAt: Long)
     private val pages = mutableMapOf<String, MealPage>()
+    private val trendPages = mutableMapOf<String, Pair<JSONObject, Long>>()
+    var daySummary by mutableStateOf<JSONObject?>(null)
+    var trends by mutableStateOf<JSONObject?>(null)
+    var trendDays by mutableIntStateOf(30)
     private val ideaPages = mutableMapOf<Int, Pair<JSONObject, Long>>()
     private val photos = object : android.util.LruCache<String, PhotoEntry>(8192) {
         override fun sizeOf(key: String, value: PhotoEntry) = (value.bitmap.byteCount / 1024).coerceAtLeast(1)
@@ -155,7 +161,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         val loaded = JSONArray(api("/profiles")).objects()
         prefs.edit().putString("server", server.trim().trimEnd('/')).putString("token", vault.encrypt(token.trim())).apply()
         profiles = loaded
-        pages.clear(); ideaPages.clear(); clearPhotos()
+        pages.clear(); ideaPages.clear(); trendPages.clear(); clearPhotos()
         if (profiles.none { it.getInt("id") == profileId }) profileId = profiles.firstOrNull()?.getInt("id") ?: 0
         connected = true
         if (profileId > 0) loadMeals()
@@ -167,8 +173,8 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun pageKey() = "$profileId:$tab:$historyAll:$activeDate:$historySearch"
-    private fun invalidateMeals() { pages.clear(); ideaPages.clear() }
+    private fun pageKey() = "$profileId:$tab:$historyAll:$activeDate:$historySearch:${if (tab == 4) trendDays else 0}"
+    private fun invalidateMeals() { pages.clear(); ideaPages.clear(); trendPages.clear() }
     private fun clearPhotos() { photos.evictAll(); photoEpoch++ }
     private fun storePage(key: String, page: MealPage) {
         pages[key] = page
@@ -177,6 +183,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun loadMeals() {
         if (profileId == 0) { meals = emptyList(); return }
         if (tab == 1) return
+        if (tab == 4) { loadTrends(); return }
         if (tab == 3) { loadIdeas(); ideaPages[profileId] = ideas!! to System.currentTimeMillis(); return }
         val key = pageKey()
         if (tab == 2 && historyAll) {
@@ -188,9 +195,13 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val offset = activeDate.atStartOfDay(ZoneId.systemDefault()).offset.totalSeconds / 60
-        val result = JSONArray(api("/meals?user_id=$profileId&date=$activeDate&offset_minutes=$offset&view=summary")).objects()
-        storePage(key, MealPage(result, result.size, System.currentTimeMillis()))
-        if (key == pageKey()) meals = result
+        val (result, summary) = coroutineScope {
+            val list = async { JSONArray(api("/meals?user_id=$profileId&date=$activeDate&offset_minutes=$offset&view=summary")).objects() }
+            val scores = async { JSONObject(api("/summaries?user_id=$profileId&date=$activeDate&timezone=${java.net.URLEncoder.encode(ZoneId.systemDefault().id, "UTF-8")}")).getJSONArray("days").getJSONObject(0) }
+            list.await() to scores.await()
+        }
+        storePage(key, MealPage(result, result.size, System.currentTimeMillis(), summary))
+        if (key == pageKey()) { meals = result; daySummary = summary }
     }
     fun refresh() = refreshMeals(true)
     private fun refreshMeals(force: Boolean) {
@@ -199,12 +210,17 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
         val generation = ++readGeneration
         val key = pageKey()
         val cached = pages[key]
-        if (tab == 3) {
+        if (tab == 4) {
+            val stored = trendPages["$profileId:$trendDays"]
+            trends = stored?.first
+            if (!force && stored != null && System.currentTimeMillis() - stored.second < 30000) return
+        } else if (tab == 3) {
             val stored = ideaPages[profileId]
             ideas = stored?.first
             avoidIngredients = stored?.first?.optJSONArray("avoid")?.strings()?.joinToString(", ") ?: prefs.getString("avoid-$profileId", "")!!
             if (!force && stored != null && System.currentTimeMillis() - stored.second < 30000) return
         } else {
+            daySummary = cached?.summary
             meals = cached?.meals ?: emptyList()
             historyTotal = cached?.total ?: 0
             if (!force && cached != null && System.currentTimeMillis() - cached.loadedAt < 30000) return
@@ -227,7 +243,7 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     } }
     fun selectProfile(id: Int) {
         if (busy || draft != null || editSource != 0) { error = "Save or discard your current analysis before switching profiles."; return }
-        profileId = id; ideas = null; meals = emptyList(); weightRecords = emptyList()
+        profileId = id; ideas = null; meals = emptyList(); weightRecords = emptyList(); daySummary = null; trends = null
         prefs.edit().putInt("profile", id).apply(); refreshMeals(false)
     }
     fun createProfile(name: String) = work {
@@ -237,6 +253,18 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun setHistory(date: LocalDate) { if (!busy) { historyAll = false; historyDate = date; refresh() } }
     fun showAllHistory() { if (!busy) { historyAll = true; refresh() } }
+    fun setTrendRange(days: Int) { if (!busy && days in listOf(7, 30, 90)) { trendDays = days; refreshMeals(false) } }
+    private suspend fun loadTrends() {
+        val person = profileId
+        val count = trendDays
+        val end = LocalDate.now()
+        val start = end.minusDays(count.toLong() - 1)
+        val zone = java.net.URLEncoder.encode(ZoneId.systemDefault().id, "UTF-8")
+        val report = JSONObject(api("/summaries?user_id=$person&start=$start&end=$end&timezone=$zone"))
+        trendPages["$person:$count"] = report to System.currentTimeMillis()
+        while (trendPages.size > 12) trendPages.remove(trendPages.keys.first())
+        if (profileId == person && trendDays == count && tab == 4) trends = report
+    }
     fun moreHistory() = work {
         val query = java.net.URLEncoder.encode(historySearch, "UTF-8")
         val response = JSONObject(api("/history?user_id=$profileId&query=$query&offset=${meals.size}&view=summary"))
@@ -289,11 +317,13 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
             data.put("revision", existing.getInt("revision")); api("/weights/${existing.getString("id")}", "PUT", data)
         }
         weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects()
+        trendPages.clear(); if (tab == 4) loadTrends()
         notice = "Body weight saved"
     }
     fun deleteBodyWeight(existing: JSONObject) = work {
         api("/weights/${existing.getString("id")}", "DELETE", JSONObject().put("revision", existing.getInt("revision")))
         weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects()
+        trendPages.clear(); if (tab == 4) loadTrends()
     }
     fun changePhoto(uri: Uri?) { if (!busy) { photoUri = uri; persistEntry() } }
 
@@ -469,8 +499,8 @@ class MealViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun disconnect() {
         if (busy) return
-        connected = false; token = ""; profiles = emptyList(); meals = emptyList(); weightRecords = emptyList(); mealDetail = null; ideas = null
-        readJob?.cancel(); loading = false; pages.clear(); ideaPages.clear(); clearPhotos()
+        connected = false; daySummary = null; trends = null; token = ""; profiles = emptyList(); meals = emptyList(); weightRecords = emptyList(); mealDetail = null; ideas = null
+        readJob?.cancel(); loading = false; pages.clear(); ideaPages.clear(); trendPages.clear(); clearPhotos()
         resetEntry(); prefs.edit().remove("token").remove("profile").apply()
     }
 }

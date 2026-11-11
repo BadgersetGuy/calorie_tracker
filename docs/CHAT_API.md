@@ -171,3 +171,11 @@ python scripts/export_openapi.py docs/openapi.json
 The schema exporter uses a temporary database even if a production DATABASE_URL exists.
 It never connects to the production database. Server rollout still needs a real database
 backup and configured hosting credentials; integration tests use reconstructed schemas.
+
+
+Reports include daily `dietary_pattern` and `legacy_psoriasis` weighted averages and
+whole-period `score_averages`. Weighting uses positive meal calories, separately for
+each score scale/rubric; missing scores are excluded and coverage is explicit. Different
+dietary score versions remain under `by_version`, with the combined value null.
+No historical psoriasis score is invented for meals lacking one. The API's zero logged
+intake on an empty day means missing logs, not observed fasting.

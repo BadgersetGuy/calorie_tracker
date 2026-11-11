@@ -2,11 +2,11 @@
 
 Updated 11 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 91 tests passed, temporary SQLite database. Additional coverage includes backdated eating-day totals, unchanged fingerprints across chunked photo hashing, full 30-meal legacy pages with bounded previews/only one original loaded, and unreadable legacy photo handling.
+- `python -m unittest discover -s tests -q`: 95 tests passed, temporary SQLite database. Additional coverage includes backdated eating-day totals, unchanged fingerprints across chunked photo hashing, full 30-meal legacy pages with bounded previews/only one original loaded, and unreadable legacy photo handling.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
-- APK metadata: `com.badgerset.meals`, version `2.0.2`, minimum Android API 26,
+- APK metadata: `com.badgerset.meals`, version `2.0.3`, minimum Android API 26,
   target API 35. Debug signing is for testing, not a Play Store release.
 
 Tests include clarification context, stale draft revisions, replacing a saved meal,
@@ -102,3 +102,18 @@ A tested, opt-in workflow input can extend ONLY the same 1-GB volume to 2 GB and
 then continue backup/deployment checks. It defaults off and awaits owner approval;
 Fly's published volume rate is $0.15/GB/month. No storage extension was performed.
 Full legacy/summary History checks for every profile remain required after rollout.
+
+
+Weighted-score/chart update: 95 backend tests pass, including calorie-weighted daily
+and whole-period aggregation, explicit coverage, zero-calorie/missing-score exclusion,
+separate historical scales/rubric versions, timezone boundaries and profile isolation.
+Native v2.0.3 (code 4) assembleDebug/lintDebug pass with 0 lint errors/11 warnings.
+The built APK signature and package/API metadata were verified. Real-device chart UX
+has not been tested. The local evaluation signing certificate differs from the public
+v2.0.2 test build, so an installed v2.0.2 may need uninstall/reinstall and token reentry.
+An attempt to store a consistent evaluation key as a repository secret was rejected
+by GitHub integration permissions; no signing secret or CI signing change was made.
+
+The owner has now approved extending the existing volume to 2 GB and deploying.
+The prepared workflow will be dispatched with the explicit storage input. Production
+success and all-profile History verification are still pending below.

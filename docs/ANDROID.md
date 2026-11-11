@@ -241,3 +241,20 @@ The dry run reports candidate payload savings, not an immediate reduction in SQL
 size: freed pages are reusable, and physically shrinking the file would need a separate,
 planned SQLite VACUUM. The command does not vacuum or silently rewrite historical photos
 on startup. It has not been run against production.
+
+
+## Daily scores and trends (v2.0.3)
+
+Today and History → By date show calorie-weighted dietary-pattern (0–100) and
+historical psoriasis (1–10) averages. The formula is sum(meal score × meal calories)
+/ sum(calories of scored meals). Missing scores are excluded, zero-calorie meals
+carry no weight, and coverage is shown. Historical psoriasis estimates remain separate;
+new analyses produce dietary-pattern scores. Rubric versions are never combined.
+
+Trends offers 7-, 30- and 90-day views of calories, protein, carbs, fat, dietary pattern,
+historical psoriasis, discipline, body weight, last meal time and meal count. Tap a
+chart for a date or open Show daily values for exact accessible values. Unlogged
+metrics appear as gaps. Body weight uses the latest entry on each local day. Meal
+timing is displayed in the report's local timezone; discipline retains its saved
+meal-time rule. Period score averages weight all scored meals across the period,
+rather than averaging daily averages. Trends reads compact reports without photos.

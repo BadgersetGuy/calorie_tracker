@@ -141,6 +141,33 @@ class SharedAPITests(unittest.TestCase):
         self.assertIsNone(empty["dietary_pattern"]["value"])
         self.assertEqual(empty["body_weights"], [])
 
+    def test_daily_and_period_score_averages_weight_meals_not_daily_averages(self):
+        first = self.post("/meals", self.data()).json
+        second_data = self.data()
+        second_data["eaten_at"] = "2026-11-10T00:30:00+02:00"
+        for item in second_data["analysis"]["ingredients"]:
+            item["grams"] *= 3
+            item["group"] = "neutral"
+        second = self.post("/meals", second_data).json
+        db.session.get(Meal, first["id"]).psoriasis_score = 8
+        db.session.get(Meal, second["id"]).psoriasis_score = 2
+        db.session.commit()
+        self.post("/meals", dict(user_id=self.a.id, request_key=str(uuid.uuid4()),
+            eaten_at="2026-11-10T12:00:00+02:00", timezone="Europe/Bucharest",
+            description="Unscored meal", weight=100, totals=dict(calories=130, protein=5, carbs=10, fat=5)))
+        other = self.data(); other["user_id"] = self.b.id
+        self.post("/meals", other)
+        response = self.client.get(f"/api/v2/summaries?user_id={self.a.id}&start=2026-11-09&end=2026-11-11&timezone=Europe/Bucharest", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        result = response.json
+        self.assertEqual([day["dietary_pattern"]["value"] for day in result["days"]], [75, 50, None])
+        self.assertEqual([day["legacy_psoriasis"]["value"] for day in result["days"]], [8, 2, None])
+        self.assertEqual(result["score_averages"]["dietary_pattern"]["value"], 56.25)
+        self.assertEqual(result["score_averages"]["legacy_psoriasis"]["value"], 3.5)
+        self.assertEqual(result["score_averages"]["dietary_pattern"]["calorie_coverage_percent"], 80)
+        self.assertEqual(result["score_averages"]["dietary_pattern"]["unscored_meals"], 1)
+        self.assertNotIn("image_data", str(result))
+
     def test_weight_pagination_scope_and_change_log(self):
         saved = self.weight().json
         self.weight(self.b.id, 60)

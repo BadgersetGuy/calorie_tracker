@@ -12,6 +12,7 @@ from sqlalchemy import event
 
 import analysis_engine as engine
 import meal_timing
+from score_summaries import score_averages
 from photo_inputs import photo_from_request
 from media_previews import photo_bytes
 
@@ -285,30 +286,20 @@ def register_record_routes(api, db, User, Meal, Details, Draft, Timing, services
             key = current.date().isoformat()
             meals = [m for m in records if meal_timing.local_time(datetime.fromisoformat(m["date"].removesuffix("Z")), str(local_zone)).date().isoformat() == key]
             serialized = meals
-            scored = [m for m in serialized if m["analysis"] and m["analysis"].get("score")]
-            versions = {}
-            for meal in scored:
-                versions.setdefault(meal["analysis"]["score"]["version"], []).append(meal)
-            by_version = []
-            for version, group in versions.items():
-                known_grams = sum(m["weight"] for m in group)
-                value = round(sum(m["analysis"]["score"]["value"] * m["weight"] for m in group) / known_grams, 2) if known_grams else None
-                by_version.append(dict(version=version, value=value, meal_count=len(group)))
-            pattern = by_version[0]["value"] if len(by_version) == 1 else None
+            scores = score_averages(serialized)
             discipline = min(m["discipline"]["value"] for m in serialized) if meals else None
             known_fiber = [m["analysis"]["totals"]["fiber"] for m in serialized if m["analysis"] and "fiber" in m["analysis"].get("totals", {})]
             totals = {n: round(sum(m[n] for m in meals), 2) for n in ("calories", "protein", "carbs", "fat")}
             totals["fiber"] = round(sum(known_fiber), 2) if known_fiber else None
             days.append(dict(date=key, meal_count=len(meals),
                 totals=totals, fiber_meals_with_data=len(known_fiber),
-                dietary_pattern=dict(value=pattern, scale="0–100", scored_meals=len(scored),
-                    by_version=by_version,
-                    unscored_meals=len(meals) - len(scored), method="Meal mass-weighted average of saved versioned app scores; not a clinical inflammation measure"),
+                **scores,
                 discipline=dict(value=discipline, scale="0–10", method="Lowest meal score of the day; early meals do not offset late eating", inferred_meals=sum(m["discipline"]["inferred"] for m in serialized)),
                 meals=serialized if request.args.get("include_meals") == "true" else [dict(id=m["id"], date=m["date"], discipline=m["discipline"], legacy_psoriasis_score=m["legacy_psoriasis_score"]) for m in serialized],
                 body_weights=[weight_data(w) for w in weights if meal_timing.local_time(w.recorded_at, str(local_zone)).date().isoformat() == key]))
             current += timedelta(days=1)
         return jsonify(user_id=profile.id, timezone=str(local_zone), days=days,
+            score_averages=score_averages(records),
             targets={n: getattr(profile, "target_" + n) for n in ("calories", "protein", "carbs", "fat")})
 
     @api.get("/logs")

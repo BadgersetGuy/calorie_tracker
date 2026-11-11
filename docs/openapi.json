@@ -1920,7 +1920,7 @@
       "get": {
         "operationId": "mobile_summaries",
         "summary": "Summaries",
-        "description": "Daily or ranged calories, protein/carbs/fat, meal timestamps, personal discipline scores, dietary-pattern score coverage, historical psoriasis scores, and logged body weights. No meals means zero logged intake, not proof of fasting. Dietary scores are app heuristics, not clinical inflammation measurements.",
+        "description": "Daily or ranged calories, protein/carbs/fat, meal timestamps, personal discipline scores, calorie-weighted daily and whole-period dietary-pattern/historical psoriasis averages with coverage, and logged body weights. Different rubric versions are never combined. Missing scores and zero-calorie meals do not pull averages down. No meals means zero logged intake, not proof of fasting. Dietary scores are app heuristics, not clinical inflammation measurements.",
         "responses": {
           "200": {
             "description": "Successful JSON response",
