@@ -39,6 +39,8 @@ def get(path, label, decode=False):
         code, data = error.code, b""
     except Exception as error:
         print(json.dumps(dict(check=label, failure=type(error).__name__)))
+        if os.getenv("CHECK_FULL_HISTORY") == "true":
+            raise RuntimeError("History verification request failed") from None
         return None
     print(json.dumps(dict(check=label, status=code, elapsed_ms=round((time.monotonic()-started)*1000), response_bytes=len(data))))
     if os.getenv("CHECK_FULL_HISTORY") == "true" and code != 200:
