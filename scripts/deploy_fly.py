@@ -185,14 +185,21 @@ def main():
                 "--local-only", "--ha=false", "--strategy", "immediate", "--wait-timeout", "300", "--yes"], timeout=1500)
             after, after_volume = primary(machines())
             if after_volume != volume: raise RuntimeError("Data volume identity changed")
-            if after["state"] not in ("started", "starting"):
-                raise RuntimeError("Updated Machine stopped instead of starting; rolling back immediately")
+            if after["state"] == "stopped":
+                # An immediate update may leave the replacement stopped until an
+                # explicit start; do not confuse that with a failed app boot.
+                run(["machine", "start", after["id"]])
+            elif after["state"] not in ("started", "starting"):
+                raise RuntimeError("Updated Machine is not available for startup")
             for _ in range(30):
                 try:
-                    with urlopen(ORIGIN + "/health", timeout=15) as response:
+                    with urlopen(ORIGIN + "/health", timeout=5) as response:
                         health = json.loads(response.read())
                     if health.get("release") == sha and health.get("status") == "ok": break
                 except Exception: pass
+                current, _ = primary(machines())
+                if current["state"] == "stopped":
+                    raise RuntimeError("Updated Machine exited after startup; rolling back")
                 time.sleep(2)
             else: raise RuntimeError("Public health did not confirm the deployed revision")
             verification = remote(after["id"], "verify", backup.get("manifest_path") or backup["backup_path"].rsplit(".", 1)[0] + ".json", str(port))

@@ -34,11 +34,11 @@ try:
     for raw in log.stdout.splitlines():
         try: lines.append(json.loads(raw).get("message", ""))
         except ValueError: pass
-    messages = "\n".join(lines)
+    messages = log.stdout
     print(json.dumps(dict(check="startup_categories",
         missing_modules=sorted(set(re.findall(r"No module named ['\"]([A-Za-z0-9_.]+)['\"]", messages))),
         exception_types=sorted(set(re.findall(r"\b([A-Za-z]+(?:Error|Exception)):", messages))),
-        app_frames=re.findall(r'File "/app/([A-Za-z_]+\.py)", line (\d+)', messages),
+        app_frames=sorted(set(re.findall(r'/app/([A-Za-z_]+\.py)', messages))),
         database_locked="database is locked" in messages,
         disk_full="database or disk is full" in messages,
         oom="out of memory" in messages.lower() or "oom-kill" in messages.lower())))
@@ -70,6 +70,7 @@ for proc in pathlib.Path('/proc').glob('[0-9]*'):
             kind = 'deployment_guard'
         status = (proc / 'status').read_text().splitlines()
         rss = next((int(line.split()[1]) for line in status if line.startswith('VmRSS:')), 0)
+        if not rss: continue
         entry = processes.setdefault(kind, dict(count=0, rss_kib=0))
         entry['count'] += 1; entry['rss_kib'] += rss
     except (OSError, ValueError): pass
