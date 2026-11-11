@@ -4,6 +4,11 @@ on:
     branches: [codex/android-meal-tracker]
     paths: [.github/workflows/publish-test-apk.yml]
   workflow_dispatch:
+    inputs:
+      expected_backend_revision:
+        description: Exact backend revision that passed deployment and history verification
+        type: string
+        required: true
 permissions:
   contents: write
 jobs:
@@ -27,24 +32,37 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
       - name: Build test APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug lintDebug
         working-directory: android
       - name: Publish public download
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          EXPECTED_BACKEND_REVISION: ${{ inputs.expected_backend_revision }}
         run: |
+          python - <<'PYTHON'
+          import json, os
+          from urllib.request import urlopen
+          expected = os.environ["EXPECTED_BACKEND_REVISION"]
+          if len(expected) != 40: raise RuntimeError("Supply the verified full backend revision")
+          with urlopen("https://calorie-tracker-billowing-rain-2129.fly.dev/health", timeout=30) as response:
+              health = json.load(response)
+          if health.get("release") != expected or health.get("status") != "ok":
+              raise RuntimeError("Expected backend revision is not healthy; refusing to publish")
+          PYTHON
           cp android/app/build/outputs/apk/debug/app-debug.apk everyday-meals-debug.apk
           sha256sum everyday-meals-debug.apk > everyday-meals-debug.apk.sha256
           cp dist/everyday-meals-plugin.zip everyday-meals-plugin.zip
           cat > release-notes.md <<'NOTES'
           Installable Android test build of Everyday Meals. Download everyday-meals-debug.apk directly on your Android phone. No GitHub login is required.
 
-          Version 2.0.2 loads compact meal lists and small photos separately, caches recent screens and avoids network requests when opening Add meal. Includes item quantity/removal controls, Add item and text corrections.
+          Version 2.0.3 adds calorie-weighted daily/period dietary-pattern and historical psoriasis score averages, with coverage. The new Trends tab charts calories, protein, carbs, fat, scores, body weight, last meal time and meal counts over 7/30/90 days. Tap a date or show exact daily values. Missing data appears as gaps; different score scales and rubric versions stay separate. New analyses use the dietary-pattern rubric; no historical psoriasis score is invented.
+
+          The backend History repair handles older Android builds too. To log yesterday, use Add meal → Eating time → date/time, then History → By date to find it.
 
           everyday-meals-plugin.zip is the private chat connector package. It contains no credentials. Connect it to the deployed /mcp endpoint using API-key/Bearer authentication and your household token in the host connection settings. Downloading the package alone does not install or authenticate the plugin.
 
-          This is a debug-signed evaluation build. Android may ask you to allow installation from your browser. No household token or OpenAI key is embedded in the app. Enter the HTTPS server address and household token to connect. If a previous test APK has an incompatible signature, uninstall that test app first; meals remain on the server. Keep your household token privately so you can reconnect.
+          This is a debug-signed evaluation build. Android may ask you to allow installation from your browser. No household token or OpenAI key is embedded in the app. Enter the HTTPS server address and household token to connect. If a previous test APK has an incompatible signature, finish pending entries and save your household token, then uninstall that test app first; meals saved on the server remain. Keep your household token privately so you can reconnect.
           NOTES
           cp everyday-meals-debug.apk everyday-meals-debug.apk.sha256 /tmp/
           cat > /tmp/INSTALL.txt <<'INSTALL'
@@ -54,8 +72,8 @@ jobs:
           enter the server address and household token again after installing.
           INSTALL
           (cd /tmp && zip -q "$GITHUB_WORKSPACE/everyday-meals-android.zip" everyday-meals-debug.apk everyday-meals-debug.apk.sha256 INSTALL.txt)
-          if ! gh release view android-test-2026-11-10-fast >/dev/null 2>&1; then
-            gh release create android-test-2026-11-10-fast --target "$GITHUB_SHA" --title 'Everyday Meals — Android test build' --notes-file release-notes.md --draft --prerelease
+          if ! gh release view android-test-2026-11-11-trends >/dev/null 2>&1; then
+            gh release create android-test-2026-11-11-trends --target "$GITHUB_SHA" --title 'Everyday Meals — scores and trends' --notes-file release-notes.md --draft --prerelease
           fi
-          gh release upload android-test-2026-11-10-fast everyday-meals-debug.apk everyday-meals-debug.apk.sha256 everyday-meals-android.zip everyday-meals-plugin.zip --clobber
-          gh release edit android-test-2026-11-10-fast --draft=false --prerelease --notes-file release-notes.md
+          gh release upload android-test-2026-11-11-trends everyday-meals-debug.apk everyday-meals-debug.apk.sha256 everyday-meals-android.zip everyday-meals-plugin.zip --clobber
+          gh release edit android-test-2026-11-11-trends --draft=false --prerelease --notes-file release-notes.md
