@@ -7,6 +7,8 @@ from pathlib import Path
 import shlex
 import sqlite3
 import subprocess
+import sys
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -16,6 +18,23 @@ from scripts import keep_fly_warm
 
 
 class DeploymentSafetyTests(unittest.TestCase):
+    def test_container_packaged_files_can_boot_the_application(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            for line in (root / "Dockerfile").read_text().splitlines():
+                parts = shlex.split(line)
+                if not parts or parts[0] != "COPY": continue
+                for name in parts[1:-1]:
+                    source = root / name
+                    if source.is_dir(): shutil.copytree(source, target / source.name)
+                    else: shutil.copyfile(source, target / source.name)
+            code = "import sys; sys.path.insert(0, sys.argv[1]); from app import app; assert app.test_client().get('/health').status_code == 200"
+            environment = dict(os.environ, DATABASE_URL="sqlite:///" + str(target / "packaging.db"), OPENAI_API_KEY="", MOBILE_API_TOKEN="packaging-test")
+            result = subprocess.run([sys.executable, "-I", "-c", code, str(target)], cwd=target,
+                env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_warm_policy_compares_image_content_after_reference_normalization(self):
         before = dict(config=dict(image="registry/app:tag"), image_ref=dict(digest="sha256:same-content"))
         after = dict(config=dict(image="registry/app@sha256:same-content"), image_ref=dict(digest="sha256:same-content"))
