@@ -10,10 +10,12 @@ APP = "calorie-tracker-billowing-rain-2129"
 ORIGIN = "https://" + APP + ".fly.dev"
 TOKEN = os.environ["MOBILE_API_TOKEN"].strip()
 
-def fly(args):
-    result = subprocess.run(["flyctl", *args, "--app", APP, "--json"], text=True, capture_output=True, timeout=60)
+def fly(args, as_json=True):
+    command = ["flyctl", *args, "--app", APP]
+    if as_json: command.append("--json")
+    result = subprocess.run(command, text=True, capture_output=True, timeout=60)
     if result.returncode: raise RuntimeError("Fly metadata read failed")
-    return json.loads(result.stdout)
+    return json.loads(result.stdout) if as_json else result.stdout
 
 def oom_count(value):
     if isinstance(value, dict):
@@ -22,10 +24,10 @@ def oom_count(value):
     return 0
 
 for machine in fly(["machine", "list"]):
-    status = fly(["machine", "status", machine["id"]])
+    status = fly(["machine", "status", machine["id"]], as_json=False).lower()
     print(json.dumps(dict(check="machine", state=machine["state"],
         memory_mb=machine.get("config", {}).get("guest", {}).get("memory_mb"),
-        recent_oom_events=oom_count(status.get("events", [])))))
+        recent_oom_event="oom_killed" in status and "true" in status or "out of memory" in status)))
 
 def get(path, label, decode=False):
     started = time.monotonic()
@@ -51,7 +53,7 @@ for profile in profiles:
 try:
     log = subprocess.run(["flyctl", "logs", "--app", APP, "--no-tail", "--json"], capture_output=True, text=True, timeout=30)
     messages = log.stdout.lower()
-    print(json.dumps(dict(check="worker_log_flags", oom="out of memory" in messages or "oom" in messages,
+    print(json.dumps(dict(check="worker_log_flags", available=log.returncode == 0, oom="out of memory" in messages or "oom-kill" in messages,
         sigkill="sigkill" in messages, worker_timeout="worker timeout" in messages)))
 except subprocess.TimeoutExpired:
     print(json.dumps(dict(check="worker_log_flags", available=False)))
