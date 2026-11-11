@@ -5,6 +5,10 @@ on:
     paths: [.github/workflows/publish-test-apk.yml]
   workflow_dispatch:
     inputs:
+      stage_only:
+        description: Build and upload privately to a draft release without publishing
+        type: boolean
+        default: false
       expected_backend_revision:
         description: Exact backend revision that passed deployment and history verification
         type: string
@@ -38,11 +42,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          STAGE_ONLY: ${{ inputs.stage_only && 'true' || 'false' }}
           EXPECTED_BACKEND_REVISION: ${{ inputs.expected_backend_revision }}
         run: |
           python - <<'PYTHON'
           import json, os
           from urllib.request import urlopen
+          if os.environ["STAGE_ONLY"] == "true": raise SystemExit(0)
           expected = os.environ["EXPECTED_BACKEND_REVISION"]
           if len(expected) != 40: raise RuntimeError("Supply the verified full backend revision")
           with urlopen("https://calorie-tracker-billowing-rain-2129.fly.dev/health", timeout=30) as response:
@@ -76,4 +82,6 @@ jobs:
             gh release create android-test-2026-11-11-trends --target "$GITHUB_SHA" --title 'Everyday Meals — scores and trends' --notes-file release-notes.md --draft --prerelease
           fi
           gh release upload android-test-2026-11-11-trends everyday-meals-debug.apk everyday-meals-debug.apk.sha256 everyday-meals-android.zip everyday-meals-plugin.zip --clobber
-          gh release edit android-test-2026-11-11-trends --draft=false --prerelease --notes-file release-notes.md
+          if [ "$STAGE_ONLY" != "true" ]; then
+            gh release edit android-test-2026-11-11-trends --draft=false --prerelease --notes-file release-notes.md
+          fi
