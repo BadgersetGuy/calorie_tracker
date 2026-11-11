@@ -3,8 +3,10 @@
 Native Kotlin / Jetpack Compose app, Android 8.0 or newer. There is no WebView.
 The Flask server retains the database, photos, analysis credentials, and household data.
 
-[Download v2.0.3 for your phone](https://github.com/BadgersetGuy/calorie_tracker/releases/download/android-test-2026-11-11-trends/everyday-meals-android.zip).
-Extract the ZIP and open the APK. If Android reports a signature conflict, finish
+[Download v2.0.3 for your phone](https://github.com/BadgersetGuy/calorie_tracker/releases/download/android-test-2026-11-11-trends/everyday-meals-2.0.3-with-trends.zip).
+Extract the ZIP and open `everyday-meals-2.0.3-with-trends.apk` from that folder. Tap
+Open in the installer, then connect to the household. Android App info should show
+Everyday Meals version 2.0.3; the connected app has five tabs including Trends. If Android reports a signature conflict, finish
 pending entries and keep your household token before uninstalling the earlier test
 build and reinstalling. Server-saved meals remain.
 
