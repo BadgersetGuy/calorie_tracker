@@ -1,8 +1,8 @@
 # Validation record
 
-Updated 10 November 2026, against public repository base `7ea45b8`.
+Updated 11 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 89 tests passed, temporary SQLite database. Additional coverage includes backdated eating-day totals, unchanged fingerprints across chunked photo hashing, full 30-meal legacy pages with bounded previews/only one original loaded, and unreadable legacy photo handling.
+- `python -m unittest discover -s tests -q`: 91 tests passed, temporary SQLite database. Additional coverage includes backdated eating-day totals, unchanged fingerprints across chunked photo hashing, full 30-meal legacy pages with bounded previews/only one original loaded, and unreadable legacy photo handling.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
@@ -82,3 +82,23 @@ These are server/network checks from that runner, not measured Android-device ti
 The Android changes add immediate cached navigation, small lazy photos and background
 decoding. The public v2.0.2 APK/ZIP checksum, signature and metadata were verified:
 https://github.com/BadgersetGuy/calorie_tracker/releases/tag/android-test-2026-11-10-fast .
+
+
+11 November History repair: worker logs contain out-of-memory/SIGKILL events on the
+256-MiB server. Full older-Android pages now serialize one stored original at a time,
+return display previews bounded to 640 pixels/48 KiB, and preserve stored originals.
+Compact queries also defer the trailing user_id column to avoid old-photo overflow-page
+reads. Fingerprints remain byte-compatible after switching to chunked hashing.
+Backdated eating time and local-day nutrition totals pass a dedicated regression test.
+All 91 backend tests pass; official MCP checks pass locally after these changes.
+
+Deployment is NOT yet complete. Attempts 42979643281 and 42981059808 stopped safely
+before rollout because the volume cannot retain the new verified backup plus reserve.
+Read-only diagnostic run 42981569510 reports a 1-GB volume, about 245 MB free,
+243 MB database and 474 MB backups (three files). Lossless compression/consolidation
+preserves every distinct restore point and dated manifest. The existing production
+revision remains 767cf0639003d9c22c6e2d870829f2c61cae5089.
+A tested, opt-in workflow input can extend ONLY the same 1-GB volume to 2 GB and
+then continue backup/deployment checks. It defaults off and awaits owner approval;
+Fly's published volume rate is $0.15/GB/month. No storage extension was performed.
+Full legacy/summary History checks for every profile remain required after rollout.

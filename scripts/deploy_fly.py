@@ -42,6 +42,20 @@ def primary(items):
         raise RuntimeError("Expected the existing /data volume; refusing to deploy without it")
     return machine, selected[0]["volume"]
 
+def approved_storage_extension(machine, volume, target):
+    if not target: return
+    if target != "2": raise RuntimeError("Only the reviewed 2-GB storage target is supported")
+    before = json.loads(run(["volumes", "show", volume, "--json"]))
+    if before.get("size_gb") not in (1, 2):
+        raise RuntimeError("Storage size differs from the reviewed 1-to-2-GB extension")
+    if before["size_gb"] == 1:
+        run(["volumes", "extend", volume, "--size", "2", "--yes"])
+    after = json.loads(run(["volumes", "show", volume, "--json"]))
+    current, current_volume = primary(machines())
+    if after.get("size_gb") != 2 or current_volume != volume or current["id"] != machine["id"]:
+        raise RuntimeError("Extended storage size or existing mount identity was not confirmed")
+    print("Owner-approved 2-GB capacity confirmed on the existing volume", flush=True)
+
 def remote(machine_id, *args):
     def keep_awake():
         # Exec activity does not count as HTTP traffic for Fly's idle auto-stop.
@@ -141,6 +155,7 @@ def main():
             time.sleep(2)
         else: raise RuntimeError("Existing Machine did not start")
     print("Existing Machine and persistent data mount verified", flush=True)
+    approved_storage_extension(machine, volume, os.getenv("APPROVED_VOLUME_SIZE_GB", ""))
     model = remote(machine["id"], "model")["model"]
     print("Provider vision access verified for " + model, flush=True)
     backup = remote(machine["id"], "backup")

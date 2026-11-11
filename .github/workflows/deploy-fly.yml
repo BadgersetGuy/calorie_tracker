@@ -4,6 +4,11 @@ on:
     branches: [codex/android-meal-tracker]
     paths: [.github/workflows/deploy-fly.yml]
   workflow_dispatch:
+    inputs:
+      extend_storage_to_2gb:
+        description: Owner-approved permanent extension from 1 to 2 GB (about $0.15 extra/month)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -17,6 +22,7 @@ jobs:
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       MOBILE_API_TOKEN: ${{ secrets.MOBILE_API_TOKEN }}
+      APPROVED_VOLUME_SIZE_GB: ${{ inputs.extend_storage_to_2gb && '2' || '' }}
       MEAL_API_URL: https://calorie-tracker-billowing-rain-2129.fly.dev
     steps:
       - uses: actions/checkout@v4

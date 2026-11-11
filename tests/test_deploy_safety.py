@@ -23,6 +23,21 @@ class DeploymentSafetyTests(unittest.TestCase):
         after["image_ref"]["digest"] = "sha256:different-content"
         self.assertFalse(keep_fly_warm.same_image(before, after))
 
+    def test_storage_extension_requires_opt_in_and_checks_existing_size(self):
+        machine = dict(id="existing", config=dict(mounts=[dict(path="/data", volume="original")]))
+        with patch.object(deploy_fly, "run") as run:
+            deploy_fly.approved_storage_extension(machine, "original", "")
+            run.assert_not_called()
+            with self.assertRaises(RuntimeError): deploy_fly.approved_storage_extension(machine, "original", "3")
+            run.assert_not_called()
+        with patch.object(deploy_fly, "run", return_value=json.dumps(dict(size_gb=4))) as run:
+            with self.assertRaises(RuntimeError): deploy_fly.approved_storage_extension(machine, "original", "2")
+            self.assertEqual(run.call_count, 1)
+        replies = [json.dumps(dict(size_gb=1)), "", json.dumps(dict(size_gb=2)), json.dumps([machine])]
+        with patch.object(deploy_fly, "run", side_effect=replies) as run:
+            deploy_fly.approved_storage_extension(machine, "original", "2")
+            self.assertEqual(run.call_args_list[1].args[0], ["volumes", "extend", "original", "--size", "2", "--yes"])
+
     def test_private_result_poll_retries_a_transient_exec_timeout(self):
         calls = []
         def fly(args, **kwargs):
