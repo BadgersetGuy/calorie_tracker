@@ -185,6 +185,8 @@ def main():
                 "--local-only", "--ha=false", "--strategy", "immediate", "--wait-timeout", "300", "--yes"], timeout=1500)
             after, after_volume = primary(machines())
             if after_volume != volume: raise RuntimeError("Data volume identity changed")
+            if after["state"] not in ("started", "starting"):
+                raise RuntimeError("Updated Machine stopped instead of starting; rolling back immediately")
             for _ in range(30):
                 try:
                     with urlopen(ORIGIN + "/health", timeout=15) as response:
