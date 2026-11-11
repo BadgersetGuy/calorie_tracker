@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import shlex
+import sys
 from datetime import datetime, timedelta, timezone
 import time
 from urllib.request import Request, urlopen
@@ -27,7 +28,7 @@ def oom_count(value):
 
 for machine in fly(["machine", "list"]):
     status = fly(["machine", "status", machine["id"]], as_json=False).lower()
-    print(json.dumps(dict(check="machine", state=machine["state"],
+    print(json.dumps(dict(check="machine", state=machine["state"], release=machine.get("config", {}).get("env", {}).get("RELEASE_COMMIT"),
         memory_mb=machine.get("config", {}).get("guest", {}).get("memory_mb"),
         recent_oom_event="oom_killed" in status and "true" in status or "out of memory" in status)))
 
@@ -36,14 +37,28 @@ for machine in fly(["machine", "list"]):
 root = pathlib.Path('/data')
 space = shutil.disk_usage(root)
 files = list((root / 'backups').glob('*'))
+processes = {}
+for proc in pathlib.Path('/proc').glob('[0-9]*'):
+    try:
+        args = (proc / 'cmdline').read_bytes().split(bytes([0]))
+        kind = (proc / 'comm').read_text().strip()
+        if args and any(arg in (b'backup', b'model', b'verify') for arg in args):
+            kind = 'deployment_guard'
+        status = (proc / 'status').read_text().splitlines()
+        rss = next((int(line.split()[1]) for line in status if line.startswith('VmRSS:')), 0)
+        entry = processes.setdefault(kind, dict(count=0, rss_kib=0))
+        entry['count'] += 1; entry['rss_kib'] += rss
+    except (OSError, ValueError): pass
 print(json.dumps(dict(total_bytes=space.total, free_bytes=space.free,
     database_bytes=(root / 'meals.db').stat().st_size,
     backup_bytes=sum(p.stat().st_size for p in files if p.is_file()),
-    backup_files=sum(p.suffix in ('.db', '.gz') for p in files))))
+    backup_files=sum(p.suffix in ('.db', '.gz') for p in files), processes=processes)))
 """
     storage = fly(["machine", "exec", machine["id"], shlex.join(["python", "-c", source])])
     if storage.get("exit_code", 0): raise RuntimeError("Storage metadata check failed")
     print(json.dumps(dict(check="storage", **json.loads(storage["stdout"]))))
+
+if os.getenv("METADATA_ONLY") == "true": sys.exit(0)
 
 def get(path, label, decode=False):
     started = time.monotonic()
