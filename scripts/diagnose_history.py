@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import shlex
+from datetime import datetime, timedelta, timezone
 import time
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -69,6 +70,14 @@ for profile in profiles:
     get(prefix + "&limit=3", "history_legacy_small_page")
     if os.getenv("CHECK_FULL_HISTORY") == "true":
         get(prefix + "&limit=30", "history_legacy_full_page")
+        end = datetime.now(timezone.utc).date()
+        start = end - timedelta(days=29)
+        report = get("/api/v2/summaries?user_id=" + str(profile["id"]) + "&start=" + str(start) + "&end=" + str(end), "trend_report_30_days", True)
+        if (not report or len(report.get("days", [])) != 30
+                or not {"dietary_pattern", "legacy_psoriasis"}.issubset(report.get("score_averages", {}))
+                or any(not {"dietary_pattern", "legacy_psoriasis", "totals", "discipline", "body_weights"}.issubset(day) for day in report["days"])):
+            raise RuntimeError("Weighted score reporting contract was not confirmed")
+
 
 # Classify recent worker failures without disclosing raw application logs.
 try:
