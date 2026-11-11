@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import shlex
 import time
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -28,6 +29,20 @@ for machine in fly(["machine", "list"]):
     print(json.dumps(dict(check="machine", state=machine["state"],
         memory_mb=machine.get("config", {}).get("guest", {}).get("memory_mb"),
         recent_oom_event="oom_killed" in status and "true" in status or "out of memory" in status)))
+
+    # Numeric storage metadata only; never publish backup paths or manifests.
+    source = """import json, pathlib, shutil
+root = pathlib.Path('/data')
+space = shutil.disk_usage(root)
+files = list((root / 'backups').glob('*'))
+print(json.dumps(dict(total_bytes=space.total, free_bytes=space.free,
+    database_bytes=(root / 'meals.db').stat().st_size,
+    backup_bytes=sum(p.stat().st_size for p in files if p.is_file()),
+    backup_files=sum(p.suffix in ('.db', '.gz') for p in files))))
+"""
+    storage = fly(["machine", "exec", machine["id"], shlex.join(["python", "-c", source])])
+    if storage.get("exit_code", 0): raise RuntimeError("Storage metadata check failed")
+    print(json.dumps(dict(check="storage", **json.loads(storage["stdout"]))))
 
 def get(path, label, decode=False):
     started = time.monotonic()
