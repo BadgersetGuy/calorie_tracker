@@ -4,6 +4,7 @@ import os
 import subprocess
 import shlex
 import sys
+import re
 from datetime import datetime, timedelta, timezone
 import time
 from urllib.request import Request, urlopen
@@ -25,6 +26,24 @@ def oom_count(value):
         return sum(int(v is True) if k.lower() in ("oom_killed", "oomkilled") else oom_count(v) for k, v in value.items())
     if isinstance(value, list): return sum(oom_count(v) for v in value)
     return 0
+
+# Publish only fixed startup categories, module identifiers and source line numbers.
+try:
+    log = subprocess.run(["flyctl", "logs", "--app", APP, "--no-tail", "--json"], capture_output=True, text=True, timeout=30)
+    lines = []
+    for raw in log.stdout.splitlines():
+        try: lines.append(json.loads(raw).get("message", ""))
+        except ValueError: pass
+    messages = "\n".join(lines)
+    print(json.dumps(dict(check="startup_categories",
+        missing_modules=sorted(set(re.findall(r"No module named ['\"]([A-Za-z0-9_.]+)['\"]", messages))),
+        exception_types=sorted(set(re.findall(r"\b([A-Za-z]+(?:Error|Exception)):", messages))),
+        app_frames=re.findall(r'File "/app/([A-Za-z_]+\.py)", line (\d+)', messages),
+        database_locked="database is locked" in messages,
+        disk_full="database or disk is full" in messages,
+        oom="out of memory" in messages.lower() or "oom-kill" in messages.lower())))
+except subprocess.TimeoutExpired:
+    print(json.dumps(dict(check="startup_categories", available=False)))
 
 if os.getenv("METADATA_ONLY") == "true":
     releases = fly(["releases", "--image"])
