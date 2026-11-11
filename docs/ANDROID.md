@@ -3,6 +3,11 @@
 Native Kotlin / Jetpack Compose app, Android 8.0 or newer. There is no WebView.
 The Flask server retains the database, photos, analysis credentials, and household data.
 
+[Download v2.0.3 for your phone](https://github.com/BadgersetGuy/calorie_tracker/releases/download/android-test-2026-11-11-trends/everyday-meals-android.zip).
+Extract the ZIP and open the APK. If Android reports a signature conflict, finish
+pending entries and keep your household token before uninstalling the earlier test
+build and reinstalling. Server-saved meals remain.
+
 ## What is implemented
 
 To backfill a forgotten meal, open **Add meal**, tap the date under **Eating time**,
@@ -15,7 +20,7 @@ pixels and 48 KiB JPEG per photo). Originals are fetched one at a time and relea
 after each row, avoiding whole-page photo memory growth on the server. The stored
 original remains unchanged and available through the authenticated photo endpoint.
 
-Version 2.0.2 uses compact list responses, separate 192-pixel thumbnails and bounded
+Version 2.0.2 and later use compact list responses, separate 192-pixel thumbnails and bounded
 1280-pixel previews. Photo decoding happens off the main thread. Recent profile/date
 screens are cached in memory for 30 seconds (up to 16 pages), with an 8-MiB image cache;
 force refresh and mutations invalidate the appropriate data. Stale/cancelled reads do
@@ -24,7 +29,7 @@ or image cache is persisted to disk. The owner selected one always-warm Fly Mach
 idle stop is disabled and later deployments retain that policy. Profile/date lookups
 use a compound SQLite index instead of scanning the photo-heavy meal table.
 
-- Today, Add meal, History and Ideas; household profiles and daily targets.
+- Today, Add meal, History, Ideas and Trends; household profiles and daily targets.
 - Search all past meals, page through older results, or browse a specific date.
 - Native camera intent and photo picker, optional photo, free-text meal/portion input.
 - Persisted analysis drafts, targeted clarification questions and text corrections.

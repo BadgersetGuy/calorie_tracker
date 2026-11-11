@@ -2,7 +2,7 @@
 
 Updated 11 November 2026, against public repository base `7ea45b8`.
 
-- `python -m unittest discover -s tests -q`: 95 tests passed, temporary SQLite database. Additional coverage includes backdated eating-day totals, unchanged fingerprints across chunked photo hashing, full 30-meal legacy pages with bounded previews/only one original loaded, and unreadable legacy photo handling.
+- `python -m unittest discover -s tests -q`: 98 tests passed, temporary SQLite database. Additional coverage includes backdated eating-day totals, unchanged fingerprints across chunked photo hashing, full 30-meal legacy pages with bounded previews/only one original loaded, and unreadable legacy photo handling.
 - `gradlew assembleDebug`: native APK compiled and packaged successfully.
 - `gradlew lintDebug`: 0 errors; dependency-update and KTX style warnings remain.
 - Android SDK `apksigner verify --verbose`: APK signature verified (v2 scheme).
@@ -84,36 +84,49 @@ decoding. The public v2.0.2 APK/ZIP checksum, signature and metadata were verifi
 https://github.com/BadgersetGuy/calorie_tracker/releases/tag/android-test-2026-11-10-fast .
 
 
-11 November History repair: worker logs contain out-of-memory/SIGKILL events on the
-256-MiB server. Full older-Android pages now serialize one stored original at a time,
-return display previews bounded to 640 pixels/48 KiB, and preserve stored originals.
-Compact queries also defer the trailing user_id column to avoid old-photo overflow-page
-reads. Fingerprints remain byte-compatible after switching to chunked hashing.
-Backdated eating time and local-day nutrition totals pass a dedicated regression test.
-All 91 backend tests pass; official MCP checks pass locally after these changes.
+11 November repair and charts are deployed from
+`dee6f76e854554f28d8b965906556562e12aebd7`:
+https://github.com/BadgersetGuy/calorie_tracker/actions/runs/42986149751 .
+Health, original volume identity, private backup/current database integrity, preserved
+records, authenticated profiles, live structured analysis and official MCP checks pass.
+The owner approved extending the existing volume from 1 to 2 GB (about $0.15/month
+extra); the same volume remains mounted. No distinct restore point was deleted.
 
-Deployment is NOT yet complete. Attempts 42979643281 and 42981059808 stopped safely
-before rollout because the volume cannot retain the new verified backup plus reserve.
-Read-only diagnostic run 42981569510 reports a 1-GB volume, about 245 MB free,
-243 MB database and 474 MB backups (three files). Lossless compression/consolidation
-preserves every distinct restore point and dated manifest. The existing production
-revision remains 767cf0639003d9c22c6e2d870829f2c61cae5089.
-A tested, opt-in workflow input can extend ONLY the same 1-GB volume to 2 GB and
-then continue backup/deployment checks. It defaults off and awaits owner approval;
-Fly's published volume rate is $0.15/GB/month. No storage extension was performed.
-Full legacy/summary History checks for every profile remain required after rollout.
+History pages now load one original at a time, return 640-pixel/48-KiB display previews,
+and preserve stored originals. Fingerprint hashes remain byte-compatible. Dedicated
+tests verify backdated eating-day totals and timing. Calorie-weighted daily/period
+score aggregates exclude missing/zero-energy scores and separate historical psoriasis
+scales and dietary rubric versions. All 98 backend tests pass locally and in CI:
+https://github.com/BadgersetGuy/calorie_tracker/actions/runs/42986155574 .
+Native v2.0.3 (code 4) build/lint pass (local lint: 0 errors, 11 warnings).
 
+All-profile live verification passed:
+https://github.com/BadgersetGuy/calorie_tracker/actions/runs/42986662399 .
+Each of four profiles returned HTTP 200 for compact 30-meal History, older-Android
+3/30-meal History and a 30-day weighted-report contract check. Summary responses
+ranged 105–2759 ms; full older-Android pages ranged 106–8764 ms. Older photo-heavy
+history can still take seconds, especially on an initial read; these runner timings
+do not establish Android-device latency. The newer APK uses compact cached lists.
+The 30-day reports took 156–226 ms. No diagnostic test meal was saved.
 
-Weighted-score/chart update: 95 backend tests pass, including calorie-weighted daily
-and whole-period aggregation, explicit coverage, zero-calorie/missing-score exclusion,
-separate historical scales/rubric versions, timezone boundaries and profile isolation.
-Native v2.0.3 (code 4) assembleDebug/lintDebug pass with 0 lint errors/11 warnings.
-The built APK signature and package/API metadata were verified. Real-device chart UX
-has not been tested. The local evaluation signing certificate differs from the public
-v2.0.2 test build, so an installed v2.0.2 may need uninstall/reinstall and token reentry.
-An attempt to store a consistent evaluation key as a repository secret was rejected
-by GitHub integration permissions; no signing secret or CI signing change was made.
+The initial rollout omitted the new summary module; automatic image rollback restored
+the previous server without restoring/overwriting data. A packaged-file startup test
+now catches missing runtime modules before deployment. Rollout checks now allow normal
+Machine stopping/starting transitions, explicitly start replacements when needed, and
+verify the exact live revision rather than treating a transient state as a failed boot.
 
-The owner has now approved extending the existing volume to 2 GB and deploying.
-The prepared workflow will be dispatched with the explicit storage input. Production
-success and all-profile History verification are still pending below.
+Phone-downloadable v2.0.3 release:
+https://github.com/BadgersetGuy/calorie_tracker/releases/tag/android-test-2026-11-11-trends .
+The published ZIP was anonymously downloaded, checked for archive corruption, and its
+APK matched the published SHA-256. Signature and package/API metadata were verified.
+Published signer SHA-256: bd73bcb129cdf52baa8939ce6774ba8ffbe57e923542397ef44381683e20adb6.
+It differs from the v2.0.2 evaluation signer: finish pending entries/save the household
+token before uninstall/reinstall if Android reports a signature conflict. Server-saved
+meals remain. Stable release signing is not configured: GitHub denied permission to
+set a signing secret; no key was published. Real-device chart/camera UX remains untested.
+
+A diagnostic run briefly logged Fly account actor metadata (name/email). The run and
+its logs were deleted; release diagnostics now whitelist fields and classify startup
+errors without raw application logs. No meal contents or access tokens were in that
+run. The owner was informed. ChatGPT account connector installation remains pending;
+a deployed MCP endpoint/package alone does not connect the account.
