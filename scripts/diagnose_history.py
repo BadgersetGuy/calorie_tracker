@@ -26,12 +26,17 @@ def oom_count(value):
     if isinstance(value, list): return sum(oom_count(v) for v in value)
     return 0
 
+if os.getenv("METADATA_ONLY") == "true":
+    releases = fly(["releases", "--image"])
+    print(json.dumps(dict(check="releases", releases=releases)))
+
 for machine in fly(["machine", "list"]):
     status = fly(["machine", "status", machine["id"]], as_json=False).lower()
     print(json.dumps(dict(check="machine", state=machine["state"], release=machine.get("config", {}).get("env", {}).get("RELEASE_COMMIT"),
         memory_mb=machine.get("config", {}).get("guest", {}).get("memory_mb"),
         recent_oom_event="oom_killed" in status and "true" in status or "out of memory" in status)))
 
+    if machine["state"] != "started": continue
     # Numeric storage metadata only; never publish backup paths or manifests.
     source = """import json, pathlib, shutil
 root = pathlib.Path('/data')
