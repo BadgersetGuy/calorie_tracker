@@ -138,6 +138,34 @@ def configuration(original, sha, model):
     config.setdefault("deploy", {}).pop("release_command", None)
     return config, port
 
+def wait_for_release(machine_id, volume, sha):
+    starts = 0
+    stopped_reads = 0
+    for _ in range(40):
+        current, mounted = primary(machines())
+        if current["id"] != machine_id or mounted != volume:
+            raise RuntimeError("Updated Machine or data mount identity changed")
+        state = current["state"]
+        if state == "stopped":
+            if starts == 0:
+                run(["machine", "start", machine_id]); starts += 1
+            else:
+                stopped_reads += 1
+                if stopped_reads >= 3:
+                    raise RuntimeError("Updated Machine repeatedly exited after startup")
+        elif state == "started":
+            stopped_reads = 0
+            try:
+                with urlopen(ORIGIN + "/health", timeout=5) as response:
+                    health = json.loads(response.read())
+                if health.get("release") == sha and health.get("status") == "ok": return
+            except Exception: pass
+        elif state in ("destroyed", "destroying", "failed"):
+            raise RuntimeError("Updated Machine failed to start")
+        # Updating/stopping/starting are normal transitions, not failed boots.
+        time.sleep(2)
+    raise RuntimeError("Public health did not confirm the deployed revision")
+
 def main():
     if not os.getenv("FLY_API_TOKEN"): raise RuntimeError("FLY_API_TOKEN is required")
     household_token = os.getenv("MOBILE_API_TOKEN", "").strip()
@@ -185,23 +213,7 @@ def main():
                 "--local-only", "--ha=false", "--strategy", "immediate", "--wait-timeout", "300", "--yes"], timeout=1500)
             after, after_volume = primary(machines())
             if after_volume != volume: raise RuntimeError("Data volume identity changed")
-            if after["state"] == "stopped":
-                # An immediate update may leave the replacement stopped until an
-                # explicit start; do not confuse that with a failed app boot.
-                run(["machine", "start", after["id"]])
-            elif after["state"] not in ("started", "starting"):
-                raise RuntimeError("Updated Machine is not available for startup")
-            for _ in range(30):
-                try:
-                    with urlopen(ORIGIN + "/health", timeout=5) as response:
-                        health = json.loads(response.read())
-                    if health.get("release") == sha and health.get("status") == "ok": break
-                except Exception: pass
-                current, _ = primary(machines())
-                if current["state"] == "stopped":
-                    raise RuntimeError("Updated Machine exited after startup; rolling back")
-                time.sleep(2)
-            else: raise RuntimeError("Public health did not confirm the deployed revision")
+            wait_for_release(after["id"], volume, sha)
             verification = remote(after["id"], "verify", backup.get("manifest_path") or backup["backup_path"].rsplit(".", 1)[0] + ".json", str(port))
             if not verification.get("records_preserved"): raise RuntimeError("Record preservation was not confirmed")
         except Exception:

@@ -18,6 +18,26 @@ from scripts import keep_fly_warm
 
 
 class DeploymentSafetyTests(unittest.TestCase):
+    def test_rollout_waits_for_transitions_and_starts_stopped_replacement(self):
+        machine = dict(id="same", config=dict(mounts=[dict(path="/data", volume="volume")]))
+        states = [dict(machine, state=state) for state in ("stopping", "stopped", "starting", "started")]
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return b'{"release":"new","status":"ok"}'
+        with patch.object(deploy_fly, "machines", side_effect=[[m] for m in states]), patch.object(deploy_fly, "run") as run, patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", return_value=Response()):
+            deploy_fly.wait_for_release("same", "volume", "new")
+            run.assert_called_once_with(["machine", "start", "same"])
+
+    def test_rollout_rejects_repeated_exit_or_volume_change(self):
+        machine = dict(id="same", state="stopped", config=dict(mounts=[dict(path="/data", volume="volume")]))
+        with patch.object(deploy_fly, "machines", return_value=[machine]), patch.object(deploy_fly, "run") as run, patch.object(deploy_fly.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "repeatedly exited"):
+                deploy_fly.wait_for_release("same", "volume", "new")
+            run.assert_called_once()
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                deploy_fly.wait_for_release("same", "other-volume", "new")
+
     def test_container_packaged_files_can_boot_the_application(self):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:
