@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "meal-diary": {
+      "type": "streamable-http",
+      "url": "https://calorie-tracker-billowing-rain-2129.fly.dev/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {"type": "api_key", "headerScheme": "bearer"}
+        }
+      }
+    }
+  }
+}

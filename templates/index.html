@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Calorie Tracker</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         body {
             padding-top: 20px;
@@ -20,6 +21,7 @@
         .preview-image {
             max-width: 100%;
             height: auto;
+            max-height: 60vh;
             margin-top: 10px;
             border-radius: 5px;
         }
@@ -61,6 +63,119 @@
         .meal-thumbnail:hover {
             transform: scale(1.1);
         }
+        .delete-btn {
+            color: #dc3545;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .delete-btn:hover {
+            background-color: #dc35451a;
+        }
+        /* Update padding for better chart visibility */
+        .macro-chart {
+            padding: 10px;
+            margin-top: 15px;
+        }
+        .meal-form {
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        /* Make charts taller */
+        #caloriesChart, #macrosTimeChart {
+            height: 300px !important;
+        }
+        .meal-card {
+            transition: transform 0.2s;
+        }
+        .meal-card:hover {
+            transform: translateY(-2px);
+        }
+        .meal-card .meal-image-container {
+            position: relative;
+            width: 150px;
+            min-width: 150px;
+            height: 150px;
+        }
+        .meal-card .meal-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 8px 0 0 0;
+            cursor: pointer;
+        }
+        .meal-card .macro-pill {
+            border-radius: 20px;
+            padding: 4px 12px;
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+            display: block;
+            text-align: center;
+            white-space: nowrap;
+        }
+        .meal-time {
+            color: #6c757d;
+            font-size: 0.9rem;
+        }
+        .delete-btn {
+            position: absolute;
+            bottom: 2px;
+            right: 10px;
+            /* background-color: rgba(255, 255, 255, 0.9); */
+            border-radius: 50%;
+            padding: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            z-index: 1;
+        }
+        .delete-btn:hover {
+            background-color: rgba(220, 53, 69, 0.1);
+        }
+        .calories-badge {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 20px;
+            padding: 5px 12px;
+            font-weight: bold;
+            z-index: 1;
+        }
+        .description-text {
+            cursor: pointer;
+            position: relative;
+        }
+        .description-text.truncated::after {
+            content: '...';
+        }
+        .description-text:hover {
+            color: #000;
+        }
+        .card-content {
+            display: flex;
+            flex: 1;
+        }
+        .macro-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            margin-top: -20px;
+            margin-left: -60px;
+        }
+        .meal-info {
+            flex: 1;
+            padding: 12px;
+        }
+        .description-container {
+            padding: 8px 12px;
+            border-top: 1px solid rgba(0,0,0,0.1);
+            background-color: #f8f9fa;
+            border-radius: 0 0 8px 8px;
+        }
+        /* Add specific height for the pie chart container */
+        #todayMacrosChart {
+            max-height: 300px !important;
+        }
     </style>
 </head>
 <body>
@@ -69,8 +184,11 @@
         <div id="userSection" class="meal-form mb-4">
             <div id="currentUser" style="display: none;">
                 <div class="d-flex justify-content-between align-items-center">
-                    <h4 class="mb-0">Current User: <span id="currentUsername"></span></h4>
-                    <button class="btn btn-outline-secondary btn-sm" onclick="switchUser()">Switch User</button>
+                    <div><h4 class="mb-0">Current User: <span id="currentUsername"></span></h4></div>
+                    <div style="justify-self: flex-end; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px">
+                        <button class="btn btn-outline-primary btn-sm" onclick="toggleTargets()">Targets</button>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="switchUser()">Switch User</button>
+                    </div>
                 </div>
             </div>
             <div id="userSelection" class="mb-3">
@@ -90,8 +208,37 @@
             </div>
         </div>
 
+        <!-- Add this after the user section -->
+        <div id="targetSection" class="meal-form mb-4" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4>Daily Targets</h4>
+                <div>
+                    <button class="btn btn-primary btn-sm me-2" onclick="saveTargets()">Save</button>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="toggleTargets()">Close</button>
+                </div>
+            </div>
+            <div class="row g-2">
+                <div class="col-md-3">
+                    <label class="form-label">Calories</label>
+                    <input type="number" class="form-control" id="targetCalories" min="0" step="50">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Protein (g)</label>
+                    <input type="number" class="form-control" id="targetProtein" min="0" step="5">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Carbs (g)</label>
+                    <input type="number" class="form-control" id="targetCarbs" min="0" step="5">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Fat (g)</label>
+                    <input type="number" class="form-control" id="targetFat" min="0" step="5">
+                </div>
+            </div>
+        </div>
+
         <h1 class="text-center mb-4">Calorie Tracker</h1>
-        
+
         <!-- Meal Input Form -->
         <div class="meal-form">
             <div class="mb-3">
@@ -99,7 +246,7 @@
                 <div class="btn-group w-100 mb-3" role="group">
                     <input type="radio" class="btn-check" name="photoMethod" id="cameraOption" autocomplete="off" checked>
                     <label class="btn btn-outline-primary" for="cameraOption">Take Photo</label>
-                    
+
                     <input type="radio" class="btn-check" name="photoMethod" id="uploadOption" autocomplete="off">
                     <label class="btn btn-outline-primary" for="uploadOption">Upload Photo</label>
                 </div>
@@ -121,25 +268,25 @@
                     </div>
                 </div>
             </div>
-            
+
             <form id="mealForm" class="mt-3">
                 <div id="previewContainer" class="mb-3" style="display: none;">
                     <img id="preview" class="preview-image">
                 </div>
                 <div class="mb-3">
                     <label for="weight" class="form-label">Weight (grams)</label>
-                    <input type="number" class="form-control" id="weight" required>
+                    <input type="number" class="form-control" id="weight" required placeholder="0" value="0">
                 </div>
                 <div class="mb-3">
                     <label for="mealDetails" class="form-label">
                         Additional Details (optional)
-                        <i class="text-muted" data-bs-toggle="tooltip" 
+                        <i class="text-muted" data-bs-toggle="tooltip"
                            title="Add any helpful details about the meal (e.g., 'Contains 3 eggs, whole wheat bread, and avocado' or 'Thai green curry with coconut milk')">
                             <small>(?)</small>
                         </i>
                     </label>
-                    <textarea class="form-control" id="mealDetails" rows="2" 
-                              placeholder="E.g., '3 eggs with whole wheat bread' or 'Thai green curry with coconut milk'"></textarea>
+                    <textarea class="form-control" id="mealDetails" rows="2"
+                              placeholder="E.g., '2 eggz'"></textarea>
                 </div>
                 <div class="d-grid">
                     <button type="submit" class="btn btn-primary">Analyze Meal</button>
@@ -161,46 +308,43 @@
             </div>
         </div>
 
-        <!-- Date Selection -->
-        <div class="meals-table">
+        <!-- Meals Section -->
+        <div class="meals-table mb-4">
             <div class="row mb-3">
                 <div class="col-md-4">
                     <label for="dateSelect" class="form-label">Select Date for Daily View</label>
                     <input type="date" class="form-control" id="dateSelect">
                 </div>
-                <div class="col-md-8">
-                    <label class="form-label">Select Date Range for Charts</label>
-                    <div class="d-flex gap-2">
-                        <input type="date" class="form-control" id="startDate">
-                        <span class="align-self-center">to</span>
-                        <input type="date" class="form-control" id="endDate">
-                        <button class="btn btn-primary" id="updateCharts">Update Charts</button>
-                    </div>
-                </div>
             </div>
-            
-            <!-- Meals Table -->
-            <div class="table-responsive">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>Image</th>
-                            <th>Time</th>
-                            <th>Description</th>
-                            <th>Weight (g)</th>
-                            <th>Calories</th>
-                            <th>Protein</th>
-                            <th>Carbs</th>
-                            <th>Fat</th>
-                        </tr>
-                    </thead>
-                    <tbody id="mealsTableBody"></tbody>
-                </table>
+
+            <!-- Replace table with cards -->
+            <div id="mealsContainer" class="row g-3">
+                <!-- Cards will be inserted here -->
+            </div>
+        </div>
+
+        <!-- Daily Macros Chart -->
+        <div class="row col-md-12 mb-4">
+            <div class="macro-chart">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4>Today's Macros Distribution</h4>
+                    <div class="chart-legend"></div>
+                </div>
+                <canvas id="todayMacrosChart"></canvas>
             </div>
         </div>
 
         <!-- Charts Section -->
         <div class="row mt-4">
+            <div class="col-12 mb-4">
+                <label class="form-label">Select Date Range for Charts</label>
+                <div class="d-flex gap-2">
+                    <input type="date" class="form-control" id="startDate">
+                    <span class="align-self-center">to</span>
+                    <input type="date" class="form-control" id="endDate">
+                    <button class="btn btn-primary" id="updateCharts">Ok</button>
+                </div>
+            </div>
             <!-- Daily Calories Chart -->
             <div class="col-12 mb-4">
                 <div class="macro-chart">
@@ -211,18 +355,7 @@
                     <canvas id="caloriesChart"></canvas>
                 </div>
             </div>
-            
-            <!-- Daily Macros Chart -->
-            <div class="col-md-6 mb-4">
-                <div class="macro-chart">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h4>Today's Macros Distribution</h4>
-                        <div class="chart-legend"></div>
-                    </div>
-                    <canvas id="todayMacrosChart"></canvas>
-                </div>
-            </div>
-            
+
             <!-- Macros Over Time Chart -->
             <div class="col-md-6 mb-4">
                 <div class="macro-chart">
@@ -260,10 +393,10 @@
         let currentUser = null;
         let stream = null;
         let imageModal = null;
-        
+
         // Register Chart.js plugins
         Chart.register(ChartDataLabels);
-        
+
         // Initialize everything after DOM is fully loaded
         document.addEventListener('DOMContentLoaded', async function() {
             // Initialize date handling first
@@ -271,13 +404,17 @@
             document.getElementById('dateSelect').addEventListener('change', loadMeals);
             document.getElementById('updateCharts').addEventListener('click', loadMeals);
             initializeDateRange();
-            
+
             // Initialize camera handling
             initializeCamera();
-            
+
             // Initialize the Bootstrap modal
             imageModal = new bootstrap.Modal(document.getElementById('imageModal'));
-            
+
+            // Initialize tooltips
+            const tooltips = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+            tooltips.forEach(tooltip => new bootstrap.Tooltip(tooltip));
+
             // Photo method selection handling
             const cameraOption = document.getElementById('cameraOption');
             const uploadOption = document.getElementById('uploadOption');
@@ -318,7 +455,7 @@
                     reader.readAsDataURL(file);
                 }
             });
-            
+
             // Initialize user last (this will trigger loadMeals if a user exists)
             await loadCurrentUser();
         });
@@ -331,10 +468,13 @@
                 document.getElementById('currentUsername').textContent = currentUser.username;
                 document.getElementById('currentUser').style.display = 'block';
                 document.getElementById('userSelection').style.display = 'none';
-                await loadMeals(); // Ensure meals are loaded after user is restored
+                document.getElementById('targetSection').style.display = 'none';
+                await loadMeals(); // Load meals without showing targets
             } else {
+                currentUser = null;
                 document.getElementById('currentUser').style.display = 'none';
                 document.getElementById('userSelection').style.display = 'block';
+                document.getElementById('targetSection').style.display = 'none';
                 await loadUsers(); // Load user list if no current user
             }
         }
@@ -400,7 +540,8 @@
             document.getElementById('currentUsername').textContent = user.username;
             document.getElementById('currentUser').style.display = 'block';
             document.getElementById('userSelection').style.display = 'none';
-            await loadMeals(); // Ensure meals are loaded after user is set
+            document.getElementById('targetSection').style.display = 'none';
+            await loadMeals(); // Load meals without showing targets
         }
 
         async function switchUser() {
@@ -408,7 +549,8 @@
             localStorage.removeItem('currentUser');
             document.getElementById('currentUser').style.display = 'none';
             document.getElementById('userSelection').style.display = 'block';
-            document.getElementById('mealsTableBody').innerHTML = '';
+            document.getElementById('targetSection').style.display = 'none';
+            document.getElementById('mealsContainer').innerHTML = '';
             // Clear charts
             if (caloriesChart) caloriesChart.destroy();
             if (todayMacrosChart) todayMacrosChart.destroy();
@@ -426,12 +568,12 @@
 
             startButton.addEventListener('click', async () => {
                 try {
-                    stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: { 
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
                             facingMode: 'environment',
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
-                        } 
+                        }
                     });
                     video.srcObject = stream;
                     await video.play(); // Ensure video is playing before showing
@@ -449,11 +591,11 @@
                     // Set canvas size to match video dimensions
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
-                    
+
                     // Draw the video frame to the canvas
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(video, 0, 0);
-                    
+
                     // Create preview
                     const preview = document.getElementById('preview');
                     preview.src = canvas.toDataURL('image/jpeg');
@@ -476,7 +618,7 @@
         // Form handling
         document.getElementById('mealForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             if (!currentUser) {
                 alert('Please select a user first');
                 return;
@@ -491,13 +633,13 @@
             const formData = new FormData();
             formData.append('weight', document.getElementById('weight').value);
             formData.append('meal_details', document.getElementById('mealDetails').value);
-            
+
             // Show loading state
             const submitButton = e.target.querySelector('button[type="submit"]');
             const originalButtonText = submitButton.innerHTML;
             submitButton.innerHTML = 'Analyzing...';
             submitButton.disabled = true;
-            
+
             try {
                 await new Promise((resolve, reject) => {
                     canvas.toBlob(async (blob) => {
@@ -507,22 +649,22 @@
                         }
 
                         formData.append('meal_photo', blob, 'meal.jpg');
-                        
+
                         try {
                             const response = await fetch('/upload', {
                                 method: 'POST',
                                 body: formData
                             });
-                            
+
                             const data = await response.json();
                             if (!response.ok) {
                                 throw new Error(data.error || 'Error analyzing meal');
                             }
-                            
+
                             if (data.error) {
                                 throw new Error(data.error);
                             }
-                            
+
                             // Show confirmation modal with analysis
                             const analysisData = JSON.parse(data.analysis);
                             document.getElementById('analysisResult').innerHTML = `
@@ -567,16 +709,16 @@
                                     <img src="data:image/jpeg;base64,${data.image_data}" class="preview-image">
                                 </div>
                             `;
-                            
+
                             document.getElementById('confirmationModal').style.display = 'block';
-                            
+
                             // Store the analysis data and image data
                             window.currentMeal = {
                                 ...analysisData,
                                 weight: document.getElementById('weight').value,
                                 image_data: data.image_data
                             };
-                            
+
                             resolve();
                         } catch (error) {
                             reject(error);
@@ -610,7 +752,7 @@
                         user_id: currentUser.id
                     })
                 });
-                
+
                 const data = await response.json();
                 if (data.success) {
                     document.getElementById('confirmationModal').style.display = 'none';
@@ -636,82 +778,271 @@
         let macrosTimeChart = null;
 
         function truncateText(text, maxLength = 30) {
+            if (!text) return '';
             if (text.length <= maxLength) return text;
-            return text.substring(0, maxLength) + '...';
+            return text.substring(0, maxLength);
         }
 
-        function updateCharts(meals, historicalData) {
+        function toggleDescription(element) {
+            const fullText = element.getAttribute('data-full-text');
+            const isTruncated = element.classList.contains('truncated');
+
+            if (isTruncated) {
+                element.textContent = fullText;
+                element.classList.remove('truncated');
+            } else {
+                element.textContent = truncateText(fullText);
+                element.classList.add('truncated');
+            }
+        }
+
+        // Split target loading into two functions: one for data and one for UI
+        async function loadTargetData() {
+            if (!currentUser) {
+                console.log('No current user, skipping target load');
+                return null;
+            }
+
+            try {
+                console.log('Loading targets for user:', currentUser.id);
+                const response = await fetch(`/users/${currentUser.id}/targets`);
+                if (!response.ok) {
+                    throw new Error('Failed to load targets');
+                }
+                const targets = await response.json();
+                console.log('Loaded targets:', targets);
+                return targets;
+            } catch (error) {
+                console.error('Error loading targets:', error);
+                return null;
+            }
+        }
+
+        async function loadTargets() {
+            const targets = await loadTargetData();
+            if (targets) {
+                // Update input fields with target values, using null coalescing to handle null values
+                document.getElementById('targetCalories').value = targets.target_calories ?? '';
+                document.getElementById('targetProtein').value = targets.target_protein ?? '';
+                document.getElementById('targetCarbs').value = targets.target_carbs ?? '';
+                document.getElementById('targetFat').value = targets.target_fat ?? '';
+
+                // Show the target section
+                document.getElementById('targetSection').style.display = 'block';
+            } else {
+                document.getElementById('targetSection').style.display = 'none';
+                alert('Error loading targets. Please try again.');
+            }
+        }
+
+        // Load meals and update charts
+        async function loadMeals() {
+            if (!currentUser) {
+                console.log('No user selected');
+                return;
+            }
+
+            const date = document.getElementById('dateSelect').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            if (!date || !startDate || !endDate) {
+                console.log('Missing date parameters');
+                return;
+            }
+
+            try {
+                // Load both meals data and targets data in parallel
+                const [mealsResponse, historyResponse, targets] = await Promise.all([
+                    fetch(`/meals?date=${date}&user_id=${currentUser.id}`),
+                    fetch(`/meal_history?start=${startDate}&end=${endDate}&user_id=${currentUser.id}`),
+                    loadTargetData()
+                ]);
+
+                if (!mealsResponse.ok) {
+                    throw new Error(`Error loading meals: ${(await mealsResponse.json()).error}`);
+                }
+                if (!historyResponse.ok) {
+                    throw new Error(`Error loading history: ${(await historyResponse.json()).error}`);
+                }
+
+                const meals = await mealsResponse.json();
+                const history = await historyResponse.json();
+
+                // Update table and charts with both meals and targets data
+                updateTable(meals);
+                updateCharts(meals, history, targets);
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert(error.message || 'Error loading meals');
+            }
+        }
+
+        function showImage(imageData) {
+            const modalImage = document.getElementById('modalImage');
+            modalImage.src = `data:image/jpeg;base64,${imageData}`;
+            imageModal.show();
+        }
+
+        function updateTable(meals) {
+            const mealsContainer = document.getElementById('mealsContainer');
+            mealsContainer.innerHTML = '';
+            // Calculate weighted psoriasis score for the day
+            let totalWeight = 0;
+            let weightedScoreSum = 0;
+            meals.forEach(meal => {
+                totalWeight += meal.calories;
+                weightedScoreSum += meal.psoriasis_score * meal.calories;
+            });
+            let weightedScore = meals.length && totalWeight ? (weightedScoreSum / totalWeight).toFixed(2) : 'N/A';
+            // Display daily weighted score at the top
+            mealsContainer.innerHTML += `
+                <div class="col-12 mb-2">
+                    <div class="alert alert-info text-center">
+                        <strong>Daily Weighted Psoriasis Score:</strong> ${weightedScore}
+                    </div>
+                </div>
+            `;
+            meals.forEach(meal => {
+                const card = document.createElement('div');
+                card.className = 'col-12 mb-3';
+
+                const description = meal.description || '';
+                const truncatedDescription = truncateText(description);
+                const needsTruncation = description.length > 30;
+
+                card.innerHTML = `
+                    <div class="card meal-card shadow-sm">
+                        <div class="d-flex">
+                            <div class="meal-image-container position-relative">
+                                ${meal.image_data ? `
+                                    <img src="data:image/jpeg;base64,${meal.image_data}"
+                                         class="meal-image"
+                                         onclick="showImage('${meal.image_data}')"
+                                         alt="Meal photo">
+                                ` : `
+                                    <div class="meal-image bg-light d-flex align-items-center justify-content-center">
+                                        <i class="fas fa-image text-muted fa-2x"></i>
+                                    </div>
+                                `}
+                                <div class="calories-badge">
+                                    ${Math.round(meal.calories)} cal
+                                </div>
+                            </div>
+                            <div class="meal-info">
+                                <div class="d-flex justify-content-between align-items-start" style="flex-direction: column; width: 100%; height: 100%">
+                                    <h6 class="card-title mb-0">${meal.weight}g</h6>
+                                    <span class="meal-time">${new Date(meal.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                    <span class="badge bg-secondary mt-2">Psoriasis Score: <strong>${meal.psoriasis_score ?? '-'}</strong></span>
+                                </div>
+                            </div>
+                            <div class="macro-container">
+                                <span class="macro-pill">
+                                    <i class="fas fa-dumbbell text-primary"></i> ${meal.protein.toFixed(0)}g
+                                </span>
+                                <span class="macro-pill">
+                                    <i class="fas fa-bread-slice text-warning"></i> ${meal.carbs.toFixed(0)}g
+                                </span>
+                                <span class="macro-pill">
+                                    <i class="fas fa-cheese text-success"></i> ${meal.fat.toFixed(0)}g
+                                </span>
+                            </div>
+                            <span class="delete-btn" onclick="deleteMeal(${meal.id})" title="Delete meal">
+                                <i class="fas fa-trash text-danger"></i>
+                            </span>
+                        </div>
+                        ${description ? `
+                            <div class="description-container">
+                                <p class="card-text text-muted small mb-0">
+                                    <span
+                                        class="description-text ${needsTruncation ? 'truncated' : ''}"
+                                        onclick="toggleDescription(this)"
+                                        data-full-text="${description}"
+                                    >${truncatedDescription}</span>
+                                </p>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+                mealsContainer.appendChild(card);
+            });
+        }
+
+        // Add delete meal function
+        async function deleteMeal(mealId) {
+            if (!currentUser) return;
+
+            if (!confirm('Are you sure you want to delete this meal?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/delete_meal/${mealId}?user_id=${currentUser.id}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    await loadMeals(); // Reload the table and charts
+                } else {
+                    throw new Error(data.error || 'Failed to delete meal');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error deleting meal: ' + error.message);
+            }
+        }
+
+        // Update the updateCharts function to accept targets parameter
+        function updateCharts(meals, historicalData, targets) {
             const ctx1 = document.getElementById('caloriesChart').getContext('2d');
             const ctx2 = document.getElementById('todayMacrosChart').getContext('2d');
             const ctx3 = document.getElementById('macrosTimeChart').getContext('2d');
-            
-            // Destroy existing charts
+
             if (caloriesChart) caloriesChart.destroy();
             if (todayMacrosChart) todayMacrosChart.destroy();
             if (macrosTimeChart) macrosTimeChart.destroy();
 
-            // Process dates for charts
-            const chartData = {
-                dates: historicalData.dates,
-                calories: historicalData.dates.map((date, i) => ({
-                    x: date,
-                    y: historicalData.calories[i]
-                })),
-                protein: historicalData.dates.map((date, i) => ({
-                    x: date,
-                    y: historicalData.protein[i]
-                })),
-                carbs: historicalData.dates.map((date, i) => ({
-                    x: date,
-                    y: historicalData.carbs[i]
-                })),
-                fat: historicalData.dates.map((date, i) => ({
-                    x: date,
-                    y: historicalData.fat[i]
-                }))
-            };
+            // Get targets from the passed parameter instead of input fields
+            const targetCalories = targets?.target_calories;
+            const targetProtein = targets?.target_protein;
+            const targetCarbs = targets?.target_carbs;
+            const targetFat = targets?.target_fat;
 
-            // Calculate daily totals for today's macros chart
-            let totalCalories = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0;
-            meals.forEach(meal => {
-                totalCalories += meal.calories;
-                totalProtein += meal.protein;
-                totalCarbs += meal.carbs;
-                totalFat += meal.fat;
-            });
-
-            // Calories Over Time Chart
+            // Calories Chart (Bar)
             caloriesChart = new Chart(ctx1, {
-                type: 'line',
+                type: 'bar',
                 data: {
+                    labels: historicalData.dates.map(date => new Date(date).toLocaleDateString()),
                     datasets: [{
                         label: 'Daily Calories',
-                        data: chartData.calories,
-                        borderColor: 'rgb(255, 99, 132)',
-                        tension: 0.1
-                    }]
+                        data: historicalData.calories,
+                        backgroundColor: historicalData.calories.map(cal =>
+                            targetCalories ? (cal > targetCalories ? 'rgba(255,99,132,0.5)' : 'rgba(75,192,192,0.5)')
+                                         : 'rgba(54, 162, 235, 0.5)'
+                        ),
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1
+                    },
+                    targetCalories ? {
+                        label: 'Target',
+                        data: Array(historicalData.dates.length).fill(targetCalories),
+                        type: 'line',
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        borderDash: [5, 5],
+                        fill: false
+                    } : null].filter(Boolean)
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: false,
                     plugins: {
                         datalabels: {
-                            display: false // Hide data labels on line chart
+                            display: false
                         }
                     },
                     scales: {
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'day',
-                                parser: 'yyyy-MM-dd',
-                                displayFormats: {
-                                    day: 'MMM d'
-                                }
-                            },
-                            ticks: {
-                                maxRotation: 45
-                            }
-                        },
                         y: {
                             beginAtZero: true,
                             title: {
@@ -725,9 +1056,9 @@
 
             // Today's Macros Distribution Chart
             const macroCalories = {
-                protein: totalProtein * 4,
-                carbs: totalCarbs * 4,
-                fat: totalFat * 9
+                protein: meals.reduce((sum, meal) => sum + meal.protein, 0) * 4,
+                carbs: meals.reduce((sum, meal) => sum + meal.carbs, 0) * 4,
+                fat: meals.reduce((sum, meal) => sum + meal.fat, 0) * 9
             };
             const totalMacroCalories = macroCalories.protein + macroCalories.carbs + macroCalories.fat;
 
@@ -746,6 +1077,7 @@
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: true,
                     plugins: {
                         datalabels: {
                             formatter: (value, ctx) => {
@@ -770,62 +1102,91 @@
                 }
             });
 
-            // Macros Over Time Chart
+            // Macros Over Time Chart (Stacked Bar)
             macrosTimeChart = new Chart(ctx3, {
-                type: 'line',
+                type: 'bar',
                 data: {
+                    labels: historicalData.dates.map(date => new Date(date).toLocaleDateString()),
                     datasets: [
                         {
                             label: 'Protein (g)',
-                            data: chartData.protein,
-                            borderColor: 'rgb(54, 162, 235)',
-                            tension: 0.1
+                            data: historicalData.protein,
+                            backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            borderWidth: 1
                         },
                         {
                             label: 'Carbs (g)',
-                            data: chartData.carbs,
-                            borderColor: 'rgb(255, 206, 86)',
-                            tension: 0.1
+                            data: historicalData.carbs,
+                            backgroundColor: 'rgba(255, 206, 86, 0.5)',
+                            borderColor: 'rgba(255, 206, 86, 1)',
+                            borderWidth: 1
                         },
                         {
                             label: 'Fat (g)',
-                            data: chartData.fat,
-                            borderColor: 'rgb(75, 192, 192)',
-                            tension: 0.1
+                            data: historicalData.fat,
+                            backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1
                         }
                     ]
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: false,
                     plugins: {
                         datalabels: {
-                            display: false // Hide data labels on line chart
+                            display: false
                         }
                     },
                     scales: {
                         x: {
-                            type: 'time',
-                            time: {
-                                unit: 'day',
-                                parser: 'yyyy-MM-dd',
-                                displayFormats: {
-                                    day: 'MMM d'
-                                }
-                            },
-                            ticks: {
-                                maxRotation: 45
-                            }
+                            stacked: true
                         },
                         y: {
-                            beginAtZero: true,
-                            title: {
-                                display: false,
-                                text: 'Grams'
-                            }
+                            stacked: true,
+                            beginAtZero: true
                         }
                     }
                 }
             });
+
+            // Add target lines for macros if they exist
+            if (targetProtein || targetCarbs || targetFat) {
+                const targetDatasets = [];
+                if (targetProtein) {
+                    targetDatasets.push({
+                        label: 'Protein Target',
+                        data: Array(historicalData.dates.length).fill(targetProtein),
+                        type: 'line',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderDash: [5, 5],
+                        fill: false
+                    });
+                }
+                if (targetCarbs) {
+                    targetDatasets.push({
+                        label: 'Carbs Target',
+                        data: Array(historicalData.dates.length).fill(targetCarbs),
+                        type: 'line',
+                        borderColor: 'rgba(255, 206, 86, 1)',
+                        borderDash: [5, 5],
+                        fill: false
+                    });
+                }
+                if (targetFat) {
+                    targetDatasets.push({
+                        label: 'Fat Target',
+                        data: Array(historicalData.dates.length).fill(targetFat),
+                        type: 'line',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderDash: [5, 5],
+                        fill: false
+                    });
+                }
+                macrosTimeChart.data.datasets.push(...targetDatasets);
+                macrosTimeChart.update();
+            }
         }
 
         // Initialize date range picker with default values
@@ -834,98 +1195,62 @@
             const startDate = new Date();
             // Set to beginning of current week (Sunday)
             startDate.setDate(startDate.getDate() - startDate.getDay());
-            
+
             const startInput = document.getElementById('startDate');
             const endInput = document.getElementById('endDate');
-            
+
             // Format dates as YYYY-MM-DD
             startInput.value = startDate.toISOString().split('T')[0];
             endInput.value = endDate.toISOString().split('T')[0];
-            
+
             // Also set the single date select to today
             document.getElementById('dateSelect').valueAsDate = new Date();
         }
 
-        // Load meals for selected date
-        async function loadMeals() {
-            if (!currentUser) {
-                console.log('No user selected');
-                return;
+        // Add function to toggle targets section
+        async function toggleTargets() {
+            const targetSection = document.getElementById('targetSection');
+            if (targetSection.style.display === 'none') {
+                await loadTargets(); // This will show the section if successful
+            } else {
+                targetSection.style.display = 'none';
             }
-            
-            const date = document.getElementById('dateSelect').value;
-            const startDate = document.getElementById('startDate').value;
-            const endDate = document.getElementById('endDate').value;
+        }
 
-            if (!date || !startDate || !endDate) {
-                console.log('Missing date parameters');
+        // Add function to save targets
+        async function saveTargets() {
+            if (!currentUser) {
+                alert('Please select a user first');
                 return;
             }
+
+            const targets = {
+                target_calories: parseFloat(document.getElementById('targetCalories').value) || null,
+                target_protein: parseFloat(document.getElementById('targetProtein').value) || null,
+                target_carbs: parseFloat(document.getElementById('targetCarbs').value) || null,
+                target_fat: parseFloat(document.getElementById('targetFat').value) || null
+            };
 
             try {
-                const [mealsResponse, historyResponse] = await Promise.all([
-                    fetch(`/meals?date=${date}&user_id=${currentUser.id}`),
-                    fetch(`/meal_history?start=${startDate}&end=${endDate}&user_id=${currentUser.id}`)
-                ]);
-                
-                if (!mealsResponse.ok) {
-                    throw new Error(`Error loading meals: ${(await mealsResponse.json()).error}`);
-                }
-                if (!historyResponse.ok) {
-                    throw new Error(`Error loading history: ${(await historyResponse.json()).error}`);
+                const response = await fetch(`/users/${currentUser.id}/targets`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(targets)
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to save targets');
                 }
 
-                const meals = await mealsResponse.json();
-                const history = await historyResponse.json();
-                
-                // Update table and charts
-                updateTable(meals);
-                updateCharts(meals, history);
-                
+                alert('Targets saved successfully');
+                await loadMeals(); // Reload charts with new targets
             } catch (error) {
-                console.error('Error:', error);
-                alert(error.message || 'Error loading meals');
+                console.error('Error saving targets:', error);
+                alert('Error saving targets. Please try again.');
             }
-        }
-
-        function showImage(imageData) {
-            const modalImage = document.getElementById('modalImage');
-            modalImage.src = `data:image/jpeg;base64,${imageData}`;
-            imageModal.show();
-        }
-
-        function updateTable(meals) {
-            const tableBody = document.getElementById('mealsTableBody');
-            tableBody.innerHTML = '';
-            
-            meals.forEach(meal => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>
-                        ${meal.image_data ? `
-                            <img src="data:image/jpeg;base64,${meal.image_data}" 
-                                 class="meal-thumbnail" 
-                                 onclick="showImage('${meal.image_data}')"
-                                 alt="Meal photo">
-                        ` : 'No image'}
-                    </td>
-                    <td>${new Date(meal.date).toLocaleTimeString()}</td>
-                    <td data-bs-toggle="tooltip" title="${meal.description}">
-                        ${truncateText(meal.description, 30)}
-                    </td>
-                    <td>${meal.weight}</td>
-                    <td>${Math.round(meal.calories)}</td>
-                    <td>${meal.protein.toFixed(1)}</td>
-                    <td>${meal.carbs.toFixed(1)}</td>
-                    <td>${meal.fat.toFixed(1)}</td>
-                `;
-                tableBody.appendChild(row);
-            });
-            
-            // Initialize tooltips
-            const tooltips = document.querySelectorAll('[data-bs-toggle="tooltip"]');
-            tooltips.forEach(tooltip => new bootstrap.Tooltip(tooltip));
         }
     </script>
 </body>
-</html> 
+</html>

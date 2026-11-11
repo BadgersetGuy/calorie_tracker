@@ -1,0 +1,33 @@
+name: Diagnose history requests privately
+on:
+  push:
+    branches: [codex/android-meal-tracker]
+    paths: [.github/workflows/diagnose-history.yml]
+  workflow_dispatch:
+    inputs:
+      metadata_only:
+        description: Inspect numeric storage/process metadata without making diary API requests
+        type: boolean
+        default: false
+      full_legacy_page:
+        description: Check the full older-Android page after the bounded-memory fix is deployed
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      MOBILE_API_TOKEN: ${{ secrets.MOBILE_API_TOKEN }}
+      METADATA_ONLY: ${{ inputs.metadata_only && 'true' || 'false' }}
+      CHECK_FULL_HISTORY: ${{ inputs.full_legacy_page && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: '0.5.6'
+      - run: python scripts/diagnose_history.py

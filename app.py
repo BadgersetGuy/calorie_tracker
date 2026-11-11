@@ -7,9 +7,14 @@ from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 import base64
 import logging
+import click
+import json
+from sqlalchemy import inspect
+from sqlalchemy import text
+from analysis_engine import normalize_photo
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -17,7 +22,7 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///meals.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:////data/meals.db')
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('postgres://'):
     app.config['SQLALCHEMY_DATABASE_URI'] = app.config['SQLALCHEMY_DATABASE_URI'].replace('postgres://', 'postgresql://', 1)
 app.config['UPLOAD_FOLDER'] = '/tmp/uploads'  # Use /tmp for cloud deployment
@@ -33,6 +38,10 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    target_calories = db.Column(db.Float, nullable=True)
+    target_protein = db.Column(db.Float, nullable=True)
+    target_carbs = db.Column(db.Float, nullable=True)
+    target_fat = db.Column(db.Float, nullable=True)
     meals = db.relationship('Meal', backref='user', lazy=True)
 
 class Meal(db.Model):
@@ -44,28 +53,59 @@ class Meal(db.Model):
     protein = db.Column(db.Float, nullable=False)
     carbs = db.Column(db.Float, nullable=False)
     fat = db.Column(db.Float, nullable=False)
+    psoriasis_score = db.Column(db.Float, nullable=True)  # 1-10 scale where 10 is healthiest
     image_data = db.Column(db.Text, nullable=True)  # Store image as base64
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
-# Create database tables
+# Create missing tables only. Existing schema upgrades are an explicit CLI step.
 with app.app_context():
+    if db.engine.url.get_backend_name() == 'sqlite':
+        database_file = db.engine.url.database
+        if database_file and database_file != ':memory:':
+            os.makedirs(os.path.dirname(os.path.abspath(database_file)), exist_ok=True)
     db.create_all()
+    # Profile/date lists and counts must not scan rows containing large legacy photos.
+    db.Index('ix_meal_user_date_id', Meal.user_id, Meal.date, Meal.id).create(db.engine, checkfirst=True)
 
-def analyze_image_with_openai(image_data, weight, meal_details=None):
+@app.cli.command('upgrade-legacy-schema')
+def upgrade_legacy_schema():
+    """Add only missing nullable columns, after the operator backs up the database."""
+    additions = {'user': ['target_calories', 'target_protein', 'target_carbs', 'target_fat'],
+                 'meal': ['psoriasis_score']}
+    for table, columns in additions.items():
+        existing = {column['name'] for column in inspect(db.engine).get_columns(table)}
+        with db.engine.begin() as connection:
+            for column in columns:
+                if column not in existing:
+                    connection.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" FLOAT'))
+                    logger.info('Added nullable column %s.%s', table, column)
+    print('Legacy schema is ready. Existing meals, scores and targets were preserved.')
+
+@app.cli.command('compress-photos')
+@click.option('--apply', is_flag=True, help='Replace smaller photo payloads after backing up the database. Default is dry run.')
+def compress_photos(apply):
+    from photo_maintenance import compress_existing_photos
+    print(json.dumps(compress_existing_photos(db, apply=apply), indent=2))
+
+
+def analyze_image_with_openai(image_data, weight=None, meal_details=None):
     try:
         if not os.getenv('OPENAI_API_KEY'):
             logger.error("OpenAI API key is not set")
             raise ValueError("OpenAI API key is not configured")
-        
+
         # Set API key directly
         openai.api_key = os.getenv('OPENAI_API_KEY')
-        
+
         # Prepare the prompt based on whether meal details are provided
-        prompt_text = f"This is a meal weighing {weight}g (not including the plate)."
+        if weight:
+            prompt_text = f"This is a meal weighing {weight}g (not including the plate)."
+        else:
+            prompt_text = f"This is a meal."
         if meal_details:
             prompt_text += f" Additional details provided: {meal_details}."
-        prompt_text += " Please identify the ingredients and estimate its nutritional content."
-            
+        prompt_text += " Please identify the ingredients and estimate its nutritional content. It is likely from Romanian cuisine or is made of ingredients regularly available in Romania. Also, please assess how psoriasis-friendly this meal is on a scale of 1-10, where 1 is most harmful for psoriasis and 10 is healthiest for psoriasis. Consider factors like inflammatory ingredients, omega-3 content, and overall nutritional balance."
+
         logger.debug(f"Sending image to OpenAI (length: {len(image_data)})")
         response = openai.ChatCompletion.create(
             model="gpt-4.1",
@@ -95,7 +135,7 @@ def analyze_image_with_openai(image_data, weight, meal_details=None):
                         "properties": {
                             "description": {
                                 "type": "string",
-                                "description": "Concise description of the identified ingredients and meal composition. Also a breakdown of each ingredients calories and estimated weight from total weight of the meal."
+                                "description": "Concise description of the identified ingredients and meal composition. Also a breakdown of each ingredients - calories, macros and estimated weight from total weight of the meal."
                             },
                             "calories": {
                                 "type": "number",
@@ -112,29 +152,45 @@ def analyze_image_with_openai(image_data, weight, meal_details=None):
                             "fat": {
                                 "type": "number",
                                 "description": "Fat content in grams"
+                            },
+                            "psoriasis_score": {
+                                "type": "number",
+                                "description": "Score from 1-10 indicating how psoriasis-friendly the meal is (10 being healthiest)"
                             }
                         },
-                        "required": ["description", "calories", "protein", "carbs", "fat"]
+                        "required": ["description", "calories", "protein", "carbs", "fat", "psoriasis_score"]
                     }
                 }
             ],
             function_call={"name": "analyze_meal"},
-            max_tokens=15000
         )
         logger.debug("Successfully received response from OpenAI")
-        
+
         # Extract the function call arguments which will be our structured output
         function_args = response.choices[0].message['function_call']['arguments']
         logger.debug(f"Function arguments: {function_args}")
         return function_args
-        
+
     except Exception as e:
         logger.error(f"Error in analyze_image_with_openai: {str(e)}")
         raise
 
+@app.errorhandler(Exception)
+def handle_error(error):
+    logger.error(f"Unhandled error: {str(error)}")
+    from werkzeug.exceptions import HTTPException
+    if isinstance(error, HTTPException):
+        return jsonify(error=error.description), error.code
+    db.session.rollback()
+    return jsonify(error='An unexpected error occurred'), 500
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Error rendering index: {str(e)}")
+        return jsonify({'error': 'Error loading page'}), 500
 
 @app.route('/upload', methods=['POST'])
 def upload_meal():
@@ -143,39 +199,41 @@ def upload_meal():
         if 'meal_photo' not in request.files:
             logger.warning("No meal_photo in request.files")
             return jsonify({'error': 'No file uploaded'}), 400
-        
+
         file = request.files['meal_photo']
         weight = float(request.form.get('weight', 0))
         meal_details = request.form.get('meal_details', '').strip()
-        
+
         if file.filename == '':
             logger.warning("Empty filename")
             return jsonify({'error': 'No file selected'}), 400
-        
+
         if file:
             try:
                 # Read and encode the image
                 file_data = file.read()
                 logger.debug(f"Read file data (size: {len(file_data)} bytes)")
-                image_data = base64.b64encode(file_data).decode('utf-8')
+                image_data = normalize_photo(base64.b64encode(file_data).decode('utf-8'))
                 logger.debug(f"Encoded image to base64 (length: {len(image_data)})")
-                
+
                 # Analyze image with OpenAI
                 analysis_result = analyze_image_with_openai(
-                    image_data, 
+                    image_data,
                     weight,
                     meal_details if meal_details else None
                 )
                 logger.debug("Successfully analyzed image")
-                
+
                 return jsonify({
                     'analysis': analysis_result,
                     'image_data': image_data
                 })
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
             except Exception as e:
                 logger.error(f"Error processing file: {str(e)}")
                 return jsonify({'error': f'Error processing image: {str(e)}'}), 500
-        
+
         return jsonify({'error': 'Invalid file'}), 400
     except Exception as e:
         logger.error(f"Unexpected error in upload_meal: {str(e)}")
@@ -183,52 +241,68 @@ def upload_meal():
 
 @app.route('/save_meal', methods=['POST'])
 def save_meal():
-    data = request.json
-    user_id = data.get('user_id')
-    
-    if not user_id:
-        return jsonify({'error': 'User ID is required'}), 400
-    
-    new_meal = Meal(
-        user_id=user_id,
-        weight=data['weight'],
-        description=data['description'],
-        calories=data['calories'],
-        protein=data['protein'],
-        carbs=data['carbs'],
-        fat=data['fat'],
-        image_data=data.get('image_data')
-    )
-    
-    db.session.add(new_meal)
-    db.session.commit()
-    
-    return jsonify({'success': True})
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        user_id = data.get('user_id')
+        if not user_id:
+            return jsonify({'error': 'User ID is required'}), 400
+
+        new_meal = Meal(
+            user_id=user_id,
+            weight=data['weight'],
+            description=data['description'],
+            calories=data['calories'],
+            protein=data['protein'],
+            carbs=data['carbs'],
+            fat=data['fat'],
+            psoriasis_score=data.get('psoriasis_score'),
+            image_data=normalize_photo(data.get('image_data'))
+        )
+
+        db.session.add(new_meal)
+        db.session.commit()
+
+        return jsonify({'success': True})
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error saving meal: {str(e)}")
+        return jsonify({'error': f'Error saving meal: {str(e)}'}), 500
 
 @app.route('/meals')
 def get_meals():
-    date = request.args.get('date', datetime.today().strftime('%Y-%m-%d'))
-    user_id = request.args.get('user_id')
-    
-    if not user_id:
-        return jsonify({'error': 'User ID is required'}), 400
-    
-    meals = Meal.query.filter(
-        db.func.date(Meal.date) == date,
-        Meal.user_id == user_id
-    ).all()
-    
-    return jsonify([{
-        'id': meal.id,
-        'date': meal.date.isoformat(),
-        'weight': meal.weight,
-        'description': meal.description,
-        'calories': meal.calories,
-        'protein': meal.protein,
-        'carbs': meal.carbs,
-        'fat': meal.fat,
-        'image_data': meal.image_data
-    } for meal in meals])
+    try:
+        date = request.args.get('date', datetime.today().strftime('%Y-%m-%d'))
+        user_id = request.args.get('user_id')
+
+        if not user_id:
+            return jsonify({'error': 'User ID is required'}), 400
+
+        meals = Meal.query.filter(
+            db.func.date(Meal.date) == date,
+            Meal.user_id == user_id
+        ).all()
+
+        return jsonify([{
+            'id': meal.id,
+            'date': meal.date.isoformat(),
+            'weight': meal.weight,
+            'description': meal.description,
+            'calories': meal.calories,
+            'protein': meal.protein,
+            'carbs': meal.carbs,
+            'fat': meal.fat,
+            'psoriasis_score': meal.psoriasis_score,
+            'image_data': meal.image_data
+        } for meal in meals])
+    except Exception as e:
+        logger.error(f"Error getting meals: {str(e)}")
+        return jsonify({'error': f'Error retrieving meals: {str(e)}'}), 500
 
 @app.route('/meal_history')
 def get_meal_history():
@@ -237,24 +311,27 @@ def get_meal_history():
         start_date = request.args.get('start')
         end_date = request.args.get('end')
         user_id = request.args.get('user_id')
-        
+
         if not all([start_date, end_date, user_id]):
-            raise ValueError("Start date, end date, and user ID are required")
-            
+            return jsonify({'error': 'Start date, end date, and user ID are required'}), 400
+
         # Convert string dates to datetime objects
-        start_date = datetime.strptime(start_date, '%Y-%m-%d')
-        end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)  # Include the end date
-        
+        try:
+            start_date = datetime.strptime(start_date, '%Y-%m-%d')
+            end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)  # Include the end date
+        except ValueError as e:
+            return jsonify({'error': f'Invalid date format: {str(e)}'}), 400
+
         # Query meals within the date range for specific user
         meals = Meal.query.filter(
             Meal.date >= start_date,
             Meal.date < end_date,
             Meal.user_id == user_id
         ).order_by(Meal.date).all()
-        
+
         # Group meals by date
         meals_by_date = {}
-        
+
         # Initialize all dates in the range
         current_date = start_date
         while current_date < end_date:
@@ -263,10 +340,12 @@ def get_meal_history():
                 'calories': 0,
                 'protein': 0,
                 'carbs': 0,
-                'fat': 0
+                'fat': 0,
+                'scored_weight': 0,
+                'weighted_psoriasis_score': 0
             }
             current_date += timedelta(days=1)
-        
+
         # Sum up the meals for each date
         for meal in meals:
             date_str = meal.date.strftime('%Y-%m-%d')
@@ -274,24 +353,35 @@ def get_meal_history():
             meals_by_date[date_str]['protein'] += meal.protein
             meals_by_date[date_str]['carbs'] += meal.carbs
             meals_by_date[date_str]['fat'] += meal.fat
+            if meal.psoriasis_score is not None:
+                meals_by_date[date_str]['scored_weight'] += meal.weight
+                meals_by_date[date_str]['weighted_psoriasis_score'] += meal.psoriasis_score * meal.weight
+
+        # Calculate final weighted psoriasis scores
+        for date_str in meals_by_date:
+            if meals_by_date[date_str]['scored_weight'] > 0:
+                meals_by_date[date_str]['weighted_psoriasis_score'] = round(
+                    meals_by_date[date_str]['weighted_psoriasis_score'] / meals_by_date[date_str]['scored_weight'],
+                    2
+                )
+            else:
+                meals_by_date[date_str]['weighted_psoriasis_score'] = None
 
         # Sort dates and prepare data for charts
         dates = sorted(meals_by_date.keys())
-        
+
         return jsonify({
-            'dates': dates,  # These are now in YYYY-MM-DD format
+            'dates': dates,
             'calories': [meals_by_date[date]['calories'] for date in dates],
             'protein': [meals_by_date[date]['protein'] for date in dates],
             'carbs': [meals_by_date[date]['carbs'] for date in dates],
-            'fat': [meals_by_date[date]['fat'] for date in dates]
+            'fat': [meals_by_date[date]['fat'] for date in dates],
+            'psoriasis_scores': [meals_by_date[date]['weighted_psoriasis_score'] for date in dates]
         })
-        
-    except ValueError as e:
-        logger.error(f"Invalid date parameters: {str(e)}")
-        return jsonify({'error': str(e)}), 400
+
     except Exception as e:
         logger.error(f"Error getting meal history: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'Error retrieving meal history: {str(e)}'}), 500
 
 # User management endpoints
 @app.route('/users', methods=['GET'])
@@ -307,23 +397,70 @@ def get_users():
 def create_user():
     data = request.json
     username = data.get('username')
-    
+
     if not username:
         return jsonify({'error': 'Username is required'}), 400
-        
+
     # Check if username already exists
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username already exists'}), 400
-    
+
     new_user = User(username=username)
     db.session.add(new_user)
     db.session.commit()
-    
+
     return jsonify({
         'id': new_user.id,
         'username': new_user.username,
         'created_at': new_user.created_at.isoformat()
     })
 
+@app.route('/delete_meal/<int:meal_id>', methods=['DELETE'])
+def delete_meal(meal_id):
+    try:
+        meal = db.get_or_404(Meal, meal_id)
+
+        # Verify the meal belongs to the requesting user
+        user_id = request.args.get('user_id')
+        if not user_id or meal.user_id != int(user_id):
+            return jsonify({'error': 'Unauthorized'}), 403
+
+        app.extensions['archive_meal'](meal)
+        MobileMealDetails.query.filter_by(meal_id=meal.id).delete()
+        app.extensions['mobile_timing_model'].query.filter_by(meal_id=meal.id).delete()
+        db.session.delete(meal)
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error deleting meal: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/users/<int:user_id>/targets', methods=['GET', 'PUT'])
+def user_targets(user_id):
+    user = db.get_or_404(User, user_id)
+
+    if request.method == 'GET':
+        return jsonify({
+            'target_calories': user.target_calories,
+            'target_protein': user.target_protein,
+            'target_carbs': user.target_carbs,
+            'target_fat': user.target_fat
+        })
+
+    elif request.method == 'PUT':
+        data = request.json
+        user.target_calories = data.get('target_calories')
+        user.target_protein = data.get('target_protein')
+        user.target_carbs = data.get('target_carbs')
+        user.target_fat = data.get('target_fat')
+
+        db.session.commit()
+        return jsonify({'success': True})
+
+from mobile_api import register_mobile_api
+MobileMealDetails = register_mobile_api(app, db, User, Meal)
+from mcp_bridge import register_mcp
+register_mcp(app)
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000))) 
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))

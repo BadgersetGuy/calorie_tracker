@@ -1,0 +1,5 @@
+-r requirements.txt
+openapi-spec-validator==0.7.2
+tomli-w==1.2.0
+mcp==2.3.0
+PyYAML==6.0.3

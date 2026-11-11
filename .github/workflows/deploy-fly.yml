@@ -1,0 +1,41 @@
+name: Deploy existing Fly backend
+on:
+  push:
+    branches: [codex/android-meal-tracker]
+    paths: [.github/workflows/deploy-fly.yml]
+  workflow_dispatch:
+    inputs:
+      extend_storage_to_2gb:
+        description: Owner-approved permanent extension from 1 to 2 GB (about $0.15 extra/month)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: calorie-tracker-production-deployment
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      MOBILE_API_TOKEN: ${{ secrets.MOBILE_API_TOKEN }}
+      APPROVED_VOLUME_SIZE_GB: ${{ inputs.extend_storage_to_2gb && '2' || '' }}
+      MEAL_API_URL: https://calorie-tracker-billowing-rain-2129.fly.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: '0.5.6'
+      - run: pip install tomli-w==1.2.0 mcp==2.3.0
+      - name: Back up, deploy, and verify without publishing private data
+        run: python scripts/deploy_fly.py
+      - name: Verify the live MCP connection with the official client
+        run: python scripts/check_mcp.py
+      - name: Measure compact lists and sized photos without logging household data
+        run: python scripts/benchmark_api.py

@@ -1,0 +1,503 @@
+import base64
+import copy
+import io
+import hashlib
+import json
+import os
+import tempfile
+import unittest
+import uuid
+from datetime import datetime
+from unittest.mock import patch
+
+directory = tempfile.TemporaryDirectory()
+os.environ["DATABASE_URL"] = "sqlite:///" + directory.name + "/test.db"
+os.environ["MOBILE_API_TOKEN"] = "test-household"
+from app import app, db, User, Meal
+import analysis_engine as engine
+from PIL import Image
+
+
+def result():
+    return engine.calculate(dict(status="ready", description="Oats and milk", questions=[],
+        assumptions=["Prepared weight"], confidence="medium", ingredients=[
+            dict(name="Cooked oats", grams=100, group="whole_grains", tags=[], source_note="Generic estimate",
+                 per_100g=dict(calories=70, protein=2.5, carbs=12, fat=1.5, fiber=2)),
+            dict(name="Milk", grams=100, group="neutral", tags=["dairy"], source_note="Generic estimate",
+                 per_100g=dict(calories=60, protein=3, carbs=5, fat=3, fiber=0))]))
+
+
+class MobileTests(unittest.TestCase):
+    def setUp(self):
+        self.ctx = app.app_context(); self.ctx.push()
+        db.drop_all(); db.create_all()
+        self.a = User(username="Me"); self.b = User(username="Wife")
+        db.session.add_all([self.a, self.b]); db.session.commit()
+        self.client = app.test_client()
+        self.headers = {"Authorization": "Bearer test-household", "X-Meal-Client": "android"}
+
+    def tearDown(self):
+        db.session.remove(); self.ctx.pop()
+
+    def post(self, path, data):
+        return self.client.post("/api/v2" + path, json=data, headers=self.headers)
+
+    def start(self, extra=None):
+        with patch("analysis_engine.analyze", return_value=result()):
+            response = self.post("/analyses", dict(user_id=self.a.id, text="200 g oats and milk", **(extra or {})))
+        self.assertEqual(response.status_code, 201, response.json)
+        return response.json
+
+    def save(self, draft, **extra):
+        return self.post(f"/analyses/{draft['id']}/save", dict(revision=draft["revision"], date="2026-11-09T12:00:00+02:00", **extra))
+
+    def test_auth_covers_new_and_legacy_routes(self):
+        for path in ["/api/v2/profiles", "/users", "/meals?user_id=1"]:
+            self.assertEqual(self.client.get(path).status_code, 401)
+        self.assertEqual(self.client.get("/health").status_code, 200)
+
+    def test_unconfigured_api_fails_closed(self):
+        with patch.dict(os.environ, {"MOBILE_API_TOKEN": ""}):
+            self.assertEqual(self.client.get("/api/v2/profiles").status_code, 503)
+
+    def test_existing_user_targets_are_shared_with_android(self):
+        self.a.target_calories = 2400
+        self.a.target_protein = 150
+        db.session.commit()
+        profiles = self.client.get("/api/v2/profiles", headers=self.headers).json
+        profile = next(p for p in profiles if p["id"] == self.a.id)
+        self.assertEqual(profile["targets"]["calories"], 2400)
+        values = dict(calories=1800, protein=100, carbs=200, fat=60)
+        response = self.client.put(f"/api/v2/profiles/{self.a.id}/targets", json=values, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        legacy = self.client.get(f"/users/{self.a.id}/targets", headers=self.headers).json
+        self.assertEqual(legacy["target_calories"], 1800)
+        self.client.put(f"/users/{self.a.id}/targets", json={"target_calories": 2100}, headers=self.headers)
+        updated = self.client.get("/api/v2/profiles", headers=self.headers).json
+        self.assertEqual(next(p for p in updated if p["id"] == self.a.id)["targets"]["calories"], 2100)
+
+    def test_historical_score_survives_copy_and_reanalysis(self):
+        image = io.BytesIO(); Image.new("RGB", (20, 20), "green").save(image, "JPEG")
+        original_photo = base64.b64encode(image.getvalue()).decode()
+        original = Meal(user_id=self.a.id, date=datetime(2025, 5, 6, 12), weight=200,
+            description="Old oats", calories=130, protein=5.5, carbs=17, fat=4.5,
+            psoriasis_score=8.2, image_data=original_photo)
+        db.session.add(original); db.session.commit()
+        copied = self.post(f"/meals/{original.id}/copy", dict(user_id=self.b.id, portion_percent=70,
+            date="2026-11-09T12:00:00Z", request_key=str(uuid.uuid4())))
+        self.assertEqual(copied.status_code, 201)
+        self.assertEqual(copied.json["legacy_psoriasis_score"], 8.2)
+        self.assertIsNone(copied.json["analysis"])
+        with patch("analysis_engine.analyze", return_value=result()):
+            draft = self.post("/analyses", dict(user_id=self.a.id, source_meal_id=original.id, text="Correct oats")).json
+        revised = self.save(draft, replace_meal_id=original.id)
+        self.assertEqual(revised.json["legacy_psoriasis_score"], 8.2)
+        self.assertEqual(revised.json["analysis"]["score"]["value"], 75)
+        self.assertEqual(revised.json["image_data"], original_photo)
+        self.assertEqual(revised.json["date"], "2025-05-06T12:00:00Z")
+
+    def test_legacy_delete_removes_mobile_metadata(self):
+        saved = self.save(self.start()).json
+        response = self.client.delete(f"/delete_meal/{saved['id']}?user_id={self.a.id}", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.execute(db.text('SELECT COUNT(*) FROM mobile_meal_details')).scalar(), 0)
+
+    def test_http_errors_keep_their_status(self):
+        self.assertEqual(self.client.get("/not-a-route", headers=self.headers).status_code, 404)
+
+    def test_legacy_score_average_does_not_treat_unscored_meals_as_zero(self):
+        for score in (8.0, None):
+            db.session.add(Meal(user_id=self.a.id, date=datetime(2026, 11, 9, 12), weight=200,
+                description="Meal", calories=100, protein=5, carbs=15, fat=2, psoriasis_score=score))
+        db.session.commit()
+        response = self.client.get(f"/meal_history?user_id={self.a.id}&start=2026-11-09&end=2026-11-09", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["psoriasis_scores"], [8.0])
+
+    def test_text_only_analysis_save_and_retry(self):
+        draft = self.start()
+        first = self.save(draft); second = self.save(draft)
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.json["id"], second.json["id"])
+        self.assertEqual(Meal.query.count(), 1)
+        self.assertEqual(first.json["date"], "2026-11-09T10:00:00Z")
+
+    def test_backdated_meal_is_saved_and_reported_on_its_eating_day(self):
+        draft = self.start()
+        response = self.post(f"/analyses/{draft['id']}/save", dict(revision=draft["revision"],
+            eaten_at="2026-11-10T17:30:00+02:00", timezone="Europe/Bucharest"))
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertEqual(response.json["date"], "2026-11-10T15:30:00Z")
+        self.assertEqual(response.json["discipline"]["value"], 10)
+        yesterday = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-10&offset_minutes=120&view=summary", headers=self.headers).json
+        today = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-11&offset_minutes=120&view=summary", headers=self.headers).json
+        self.assertEqual([meal["id"] for meal in yesterday], [response.json["id"]])
+        self.assertEqual(today, [])
+        summary = self.client.get(f"/api/v2/summaries?user_id={self.a.id}&date=2026-11-10&timezone=Europe/Bucharest", headers=self.headers).json
+        self.assertEqual(summary["days"][0]["totals"]["calories"], 130)
+
+    def test_streamed_photo_fingerprint_preserves_existing_revision_values(self):
+        context = dict(text="Cappuccino", previous=dict(grams=125.5, name="Milk"), conversation=[])
+        for photo in (None, "", "a" * (1024 * 1024 + 20), 'quotes"\\\n' + "î🙂"):
+            previous = hashlib.sha256(json.dumps([context, photo, engine.MODEL, engine.PROMPT_VERSION, engine.SCORE_VERSION], sort_keys=True).encode()).hexdigest()
+            self.assertEqual(engine.fingerprint(context, photo), previous)
+
+    def test_full_history_page_uses_small_previews_and_keeps_originals(self):
+        source = io.BytesIO()
+        Image.frombytes("RGB", (1600, 1200), os.urandom(1600 * 1200 * 3)).save(source, "JPEG", quality=92)
+        encoded = base64.b64encode(source.getvalue()).decode()
+        profile_id = self.a.id
+        for index in range(30):
+            db.session.add(Meal(user_id=profile_id, date=datetime(2026, 11, 10, 12), description="Meal " + str(index),
+                weight=100, calories=100, protein=5, carbs=15, fat=2, image_data=encoded))
+        db.session.commit(); db.session.expunge_all()
+        from sqlalchemy import event
+        loaded = []
+        def on_photo_refresh(record, context, attributes):
+            if "image_data" in attributes:
+                loaded.append(sum(isinstance(obj, Meal) and "image_data" in obj.__dict__ for obj in db.session.identity_map.values()))
+        event.listen(Meal, "refresh", on_photo_refresh)
+        try:
+            response = self.client.get(f"/api/v2/history?user_id={profile_id}", headers=self.headers)
+        finally:
+            event.remove(Meal, "refresh", on_photo_refresh)
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(len(response.json["meals"]), 30)
+        self.assertTrue(loaded)
+        self.assertLessEqual(max(loaded), 1)
+        for meal in response.json["meals"]:
+            preview = base64.b64decode(meal["image_data"])
+            self.assertLessEqual(len(preview), 48 * 1024)
+            self.assertLessEqual(max(Image.open(io.BytesIO(preview)).size), 640)
+            self.assertEqual(meal["calories"], 100)
+            self.assertIn("revision", meal)
+        first_id = response.json["meals"][0]["id"]
+        original = self.client.get(f"/api/v2/meals/{first_id}/photo", headers=self.headers)
+        self.assertEqual(original.data, source.getvalue())
+
+    def test_unreadable_legacy_photo_does_not_hide_meal_history(self):
+        record = Meal(user_id=self.a.id, date=datetime(2026, 11, 10), description="Legacy meal",
+            weight=100, calories=100, protein=5, carbs=15, fat=2, image_data="broken-photo")
+        db.session.add(record); db.session.commit()
+        path = f"/api/v2/history?user_id={self.a.id}"
+        response = self.client.get(path, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json["meals"][0]["image_data"])
+        with patch("mobile_api.photo_bytes", side_effect=engine.Image.DecompressionBombError("Too large")):
+            self.assertEqual(self.client.get(path, headers=self.headers).status_code, 200)
+        self.assertEqual(db.session.get(Meal, record.id).image_data, "broken-photo")
+
+    def test_summary_lists_skip_photos_fingerprints_and_full_ingredients(self):
+        image = io.BytesIO(); Image.new("RGB", (1800, 1200), "green").save(image, "JPEG")
+        encoded = base64.b64encode(image.getvalue()).decode()
+        saved = self.save(self.start(dict(image_data=encoded))).json
+        with patch("analysis_engine.fingerprint", side_effect=AssertionError("Summary must not hash photo payloads")):
+            response = self.client.get(f"/api/v2/history?user_id={self.a.id}&view=summary", headers=self.headers)
+            today = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-09&view=summary", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        item = response.json["meals"][0]
+        self.assertTrue(item["has_photo"])
+        self.assertNotIn("image_data", item)
+        self.assertNotIn("revision", item)
+        self.assertNotIn("ingredients", item["analysis"])
+        self.assertEqual(item["analysis"]["score"], saved["analysis"]["score"])
+        self.assertEqual(today.json[0]["calories"], saved["calories"])
+        self.assertLess(len(response.data), len(encoded) // 2)
+        detail = self.client.get(f"/api/v2/meals/{saved['id']}?include_images=false", headers=self.headers).json
+        self.assertIsNone(detail["image_data"])
+        self.assertIn("revision", detail)
+        self.assertEqual(detail["analysis"]["ingredients"], saved["analysis"]["ingredients"])
+
+    def test_history_and_profile_counts_use_a_covering_index(self):
+        for sql in ("SELECT id FROM meal WHERE user_id=1 ORDER BY date DESC, id DESC LIMIT 30", "SELECT count(*) FROM meal WHERE user_id=1"):
+            plan = db.session.execute(db.text("EXPLAIN QUERY PLAN " + sql)).all()
+            self.assertTrue(any("ix_meal_user_date_id" in row[-1] for row in plan), plan)
+            self.assertFalse(any("SCAN meal" in row[-1] for row in plan), plan)
+
+    def test_photo_previews_are_small_and_do_not_rewrite_original(self):
+        image = io.BytesIO(); Image.new("RGB", (2400, 1600), "green").save(image, "JPEG")
+        encoded = base64.b64encode(image.getvalue()).decode()
+        old = Meal(user_id=self.a.id, date=datetime(2025, 1, 1), description="Photo", weight=100,
+            calories=100, protein=5, carbs=15, fat=2, image_data=encoded)
+        db.session.add(old); db.session.commit()
+        path = f"/api/v2/meals/{old.id}/photo"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        thumbnail = self.client.get(path + "?size=thumbnail", headers=self.headers)
+        self.assertEqual(thumbnail.status_code, 200)
+        self.assertLessEqual(max(Image.open(io.BytesIO(thumbnail.data)).size), 192)
+        preview = self.client.get(path + "?size=preview", headers=self.headers)
+        self.assertLessEqual(len(preview.data), 200 * 1024)
+        self.assertLessEqual(max(Image.open(io.BytesIO(preview.data)).size), 1280)
+        self.assertEqual(self.client.get(path, headers=self.headers).data, image.getvalue())
+        self.assertEqual(db.session.get(Meal, old.id).image_data, encoded)
+        self.assertEqual(self.client.get(path + "?size=invalid", headers=self.headers).status_code, 400)
+
+    def test_reports_and_ideas_do_not_hash_photo_payloads(self):
+        self.save(self.start())
+        with patch("analysis_engine.fingerprint", side_effect=AssertionError("Reports must not hash photos")):
+            response = self.client.get(f"/api/v2/summaries?user_id={self.a.id}&date=2026-11-09&timezone=Europe/Bucharest", headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(response.json["days"][0]["totals"]["calories"], 130)
+            self.assertEqual(response.json["days"][0]["totals"]["fiber"], 2)
+            self.assertNotIn("image_data", response.json["days"][0]["meals"][0])
+            ideas = self.post("/suggestions", dict(user_id=self.a.id, request_key=str(uuid.uuid4())))
+            self.assertEqual(ideas.status_code, 201, ideas.json)
+
+    def rpc(self, method, params=None):
+        return self.client.post("/mcp", headers=self.headers, json=dict(jsonrpc="2.0", id=1, method=method, params=params or {}))
+
+    def test_mcp_auth_handshake_discovery_and_read_call(self):
+        self.assertEqual(self.client.post("/mcp", json={}).status_code, 401)
+        with patch.dict(os.environ, MOBILE_API_TOKEN=""):
+            self.assertEqual(self.client.post("/mcp", json={}).status_code, 503)
+        init = self.rpc("initialize", dict(protocolVersion="2025-03-26"))
+        self.assertEqual(init.json["result"]["protocolVersion"], "2025-03-26")
+        tools = self.rpc("tools/list").json["result"]["tools"]
+        self.assertEqual(len(tools), 30)
+        self.assertEqual(len({t["name"] for t in tools}), 30)
+        self.assertNotIn('"$ref"', __import__('json').dumps(tools))
+        response = self.rpc("tools/call", dict(name="mobile_profiles", arguments={}))
+        payload = __import__('json').loads(response.json["result"]["content"][0]["text"])
+        self.assertEqual(payload["status"], 200)
+        self.assertEqual({p["username"] for p in payload["data"]}, {"Me", "Wife"})
+        blocked = self.client.post("/mcp", headers={**self.headers, "Origin": "https://evil.invalid"}, json={})
+        self.assertEqual(blocked.status_code, 403)
+
+    def test_mcp_writes_use_the_same_routes_and_validation(self):
+        response = self.rpc("tools/call", dict(name="mobile_create_profile", arguments=dict(body=dict(username="Test profile"))))
+        self.assertFalse(response.json["result"]["isError"])
+        self.assertIsNotNone(User.query.filter_by(username="Test profile").first())
+        invalid = self.rpc("tools/call", dict(name="mobile_create_profile", arguments=dict(body=dict(username="Other", secret="unexpected"))))
+        self.assertEqual(invalid.json["error"]["code"], -32602)
+        self.assertIsNone(User.query.filter_by(username="Other").first())
+        invalid = self.rpc("tools/call", dict(name="arbitrary_url", arguments=dict(url="https://evil.invalid")))
+        self.assertEqual(invalid.json["error"]["code"], -32602)
+
+    def test_mcp_notification_does_not_execute_a_write_and_photos_are_images(self):
+        notification = self.client.post("/mcp", headers=self.headers, json=dict(jsonrpc="2.0", method="tools/call", params=dict(name="mobile_create_profile", arguments=dict(body=dict(username="Not a request")))))
+        self.assertEqual(notification.status_code, 202)
+        self.assertIsNone(User.query.filter_by(username="Not a request").first())
+        image = io.BytesIO(); Image.new("RGB", (100, 100), "green").save(image, "JPEG")
+        saved = self.save(self.start(dict(image_data=base64.b64encode(image.getvalue()).decode()))).json
+        tools = self.rpc("tools/list").json["result"]["tools"]
+        photo_tool = next(t["name"] for t in tools if "photo" in t["name"] and "draft" not in t["name"])
+        response = self.rpc("tools/call", dict(name=photo_tool, arguments=dict(path=dict(meal_id=saved["id"]))))
+        content = response.json["result"]["content"][0]
+        self.assertEqual(content["type"], "image")
+        self.assertEqual(content["mimeType"], "image/jpeg")
+
+    def edit_items(self, draft, items, revision=None):
+        return self.client.put(f"/api/v2/analyses/{draft['id']}/ingredients", headers=self.headers,
+            json=dict(revision=draft["revision"] if revision is None else revision, items=items))
+
+    def test_item_quantities_and_removal_recalculate_without_model(self):
+        draft = self.start()
+        with patch("analysis_engine.analyze") as provider:
+            edited = self.edit_items(draft, [dict(index=0, grams=70)])
+        self.assertEqual(edited.status_code, 200, edited.json)
+        provider.assert_not_called()
+        value = edited.json["result"]
+        self.assertEqual(value["weight"], 70)
+        self.assertEqual(value["totals"]["calories"], 49)
+        self.assertEqual(value["score"]["value"], 100)
+        self.assertEqual(value["ingredients"][0]["per_100g"], draft["result"]["ingredients"][0]["per_100g"])
+        self.assertNotIn("Milk", value["description"])
+        self.assertEqual(Meal.query.count(), 0)
+        self.assertEqual(self.edit_items(draft, [dict(index=0, grams=90)]).status_code, 409)
+        saved = self.save(edited.json)
+        self.assertEqual(saved.json["calories"], 49)
+        self.assertEqual(self.edit_items(edited.json, [dict(index=0, grams=90)]).status_code, 409)
+
+    def test_invalid_item_edits_do_not_mutate_draft(self):
+        draft = self.start()
+        for items in ([], [dict(index=0, grams=0)], [dict(index=4, grams=100)],
+                [dict(index=True, grams=100)], [dict(index=0, grams=100), dict(index=0, grams=100)],
+                [dict(index=0, grams=15000), dict(index=1, grams=15000)]):
+            response = self.edit_items(draft, items)
+            self.assertEqual(response.status_code, 400, response.json)
+        current = self.client.get(f"/api/v2/analyses/{draft['id']}", headers=self.headers).json
+        self.assertEqual(current["revision"], draft["revision"])
+        self.assertEqual(current["result"], draft["result"])
+
+    def test_edit_saved_items_uses_existing_analysis_and_defers_changes_until_save(self):
+        meal = self.save(self.start()).json
+        with patch("analysis_engine.analyze") as provider:
+            draft = self.post("/analyses", dict(user_id=self.a.id, source_meal_id=meal["id"],
+                use_existing_analysis=True, text=meal["description"])).json
+        provider.assert_not_called()
+        edited = self.edit_items(draft, [dict(index=1, grams=50)]).json
+        self.assertEqual(db.session.get(Meal, meal["id"]).calories, meal["calories"])
+        saved = self.save(edited, replace_meal_id=meal["id"])
+        self.assertEqual(saved.status_code, 201, saved.json)
+        self.assertEqual(saved.json["id"], meal["id"])
+        self.assertEqual(saved.json["date"], meal["date"])
+        self.assertEqual(saved.json["calories"], 30)
+        self.assertEqual(Meal.query.count(), 1)
+
+    def test_text_correction_receives_the_latest_manual_item_list(self):
+        draft = self.start(dict(weight=200))
+        edited = self.edit_items(draft, [dict(index=0, grams=80)]).json
+        with patch("analysis_engine.analyze", return_value=result()) as provider:
+            response = self.post(f"/analyses/{draft['id']}/clarifications", dict(revision=edited["revision"], text="Add 10 g almonds"))
+        self.assertEqual(response.status_code, 200)
+        context = provider.call_args.args[0]
+        self.assertIsNone(context["weight"])
+        self.assertEqual(context["previous"]["ingredients"], edited["result"]["ingredients"])
+        self.assertEqual(len(context["previous"]["ingredients"]), 1)
+        self.assertEqual(context["conversation"][-1]["answer"], "Add 10 g almonds")
+
+    def test_clarify_then_reanalyse_with_history(self):
+        question = dict(status="clarify", description="Drink", questions=["Which milk?"], assumptions=[], confidence="low", ingredients=[])
+        with patch("analysis_engine.analyze", return_value=question):
+            draft = self.post("/analyses", dict(user_id=self.a.id, text="250ml cappuccino")).json
+        self.assertEqual(self.save(draft).status_code, 400)
+        with patch("analysis_engine.analyze", return_value=result()) as provider:
+            updated = self.post(f"/analyses/{draft['id']}/clarifications", dict(revision=1, text="Whole milk, no sugar"))
+            self.assertEqual(updated.status_code, 200, updated.json)
+            context = provider.call_args.args[0]
+            self.assertEqual(context["conversation"][0]["answer"], "Whole milk, no sugar")
+        self.assertEqual(self.save(draft).status_code, 409)
+        self.assertEqual(self.save(updated.json).status_code, 201)
+
+    def test_identical_input_is_cached(self):
+        self.start()
+        with patch("analysis_engine.analyze") as provider:
+            self.start()
+            provider.assert_not_called()
+
+    def test_copy_to_self_or_wife_scales_without_model(self):
+        saved = self.save(self.start()).json
+        for profile in [self.a, self.b]:
+            with patch("analysis_engine.analyze") as provider:
+                data = dict(user_id=profile.id, portion_percent=70, date="2026-11-10T09:00:00+02:00", request_key=str(uuid.uuid4()))
+                copied = self.post(f"/meals/{saved['id']}/copy", data)
+                self.assertEqual(copied.status_code, 201, copied.json)
+                self.assertAlmostEqual(copied.json["calories"], saved["calories"] * .7)
+                self.assertAlmostEqual(copied.json["weight"], 140)
+                self.assertEqual(copied.json["analysis"]["score"], saved["analysis"]["score"])
+                retried = self.post(f"/meals/{saved['id']}/copy", data)
+                self.assertEqual(retried.json["id"], copied.json["id"])
+                provider.assert_not_called()
+        self.assertEqual(Meal.query.count(), 3)
+
+    def test_weight_copy_and_conflicting_retry(self):
+        saved = self.save(self.start()).json
+        data = dict(user_id=self.b.id, weight=50, date="2026-11-10T09:00:00Z", request_key=str(uuid.uuid4()))
+        copied = self.post(f"/meals/{saved['id']}/copy", data)
+        self.assertEqual(copied.json["weight"], 50)
+        data["weight"] = 100
+        self.assertEqual(self.post(f"/meals/{saved['id']}/copy", data).status_code, 409)
+
+    def test_old_meal_can_be_reused_without_ingredients(self):
+        old = Meal(user_id=self.a.id, weight=400, description="Old meal", calories=600, protein=30, carbs=70, fat=20)
+        db.session.add(old); db.session.commit()
+        response = self.post(f"/meals/{old.id}/copy", dict(user_id=self.b.id, portion_percent=70,
+            date="2026-11-09T12:00:00Z", request_key=str(uuid.uuid4())))
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json["calories"], 420)
+        self.assertIsNone(response.json["analysis"])
+        self.assertEqual(db.session.get(Meal, old.id).calories, 600)
+
+    def test_edit_existing_meal_preserves_id_date_and_count(self):
+        saved = self.save(self.start()).json
+        revised = result(); revised["description"] = "Corrected oats"
+        with patch("analysis_engine.analyze", return_value=revised):
+            draft = self.post("/analyses", dict(user_id=self.a.id, source_meal_id=saved["id"], text="Actually oats")).json
+        edited = self.save(draft, replace_meal_id=saved["id"])
+        self.assertEqual(edited.status_code, 201, edited.json)
+        self.assertEqual(edited.json["id"], saved["id"])
+        self.assertEqual(edited.json["date"], saved["date"])
+        self.assertEqual(Meal.query.count(), 1)
+
+    def test_cannot_replace_other_profiles_meal(self):
+        saved = self.save(self.start()).json
+        with patch("analysis_engine.analyze", return_value=result()):
+            draft = self.post("/analyses", dict(user_id=self.b.id, source_meal_id=saved["id"], text="Copy estimate")).json
+        self.assertEqual(self.save(draft, replace_meal_id=saved["id"]).status_code, 400)
+
+    def test_edit_refuses_a_meal_changed_on_other_phone(self):
+        saved = self.save(self.start()).json
+        with patch("analysis_engine.analyze", return_value=result()):
+            draft = self.post("/analyses", dict(user_id=self.a.id, source_meal_id=saved["id"], text="Correcting meal")).json
+        record = db.session.get(Meal, saved["id"])
+        record.calories = 999
+        db.session.commit()
+        self.assertEqual(self.save(draft, replace_meal_id=saved["id"]).status_code, 409)
+        self.assertEqual(db.session.get(Meal, saved["id"]).calories, 999)
+
+    def test_local_day_includes_utc_previous_evening(self):
+        draft = self.start()
+        self.post(f"/analyses/{draft['id']}/save", dict(revision=1, date="2026-11-09T00:30:00+02:00"))
+        rows = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-09&offset_minutes=120", headers=self.headers)
+        self.assertEqual(len(rows.json), 1)
+        rows = self.client.get(f"/api/v2/meals?user_id={self.a.id}&date=2026-11-08&offset_minutes=120", headers=self.headers)
+        self.assertEqual(len(rows.json), 0)
+
+    def test_history_search_is_profile_scoped_and_paginated(self):
+        for i in range(35):
+            db.session.add(Meal(user_id=self.a.id, weight=100, description="Oats breakfast", calories=200, protein=10, carbs=30, fat=5))
+        db.session.add(Meal(user_id=self.b.id, weight=100, description="Oats for wife", calories=200, protein=10, carbs=30, fat=5))
+        db.session.commit()
+        response = self.client.get(f"/api/v2/history?user_id={self.a.id}&query=Oats", headers=self.headers)
+        self.assertEqual(response.json["total"], 35)
+        self.assertEqual(len(response.json["meals"]), 30)
+        next_page = self.client.get(f"/api/v2/history?user_id={self.a.id}&query=Oats&offset=30", headers=self.headers)
+        self.assertEqual(len(next_page.json["meals"]), 5)
+        self.assertFalse({m["id"] for m in response.json["meals"]} & {m["id"] for m in next_page.json["meals"]})
+        escaped = self.client.get(f"/api/v2/history?user_id={self.a.id}&query=%25", headers=self.headers)
+        self.assertEqual(escaped.json["total"], 0)
+
+    def test_bad_inputs_do_not_write_meals(self):
+        self.assertEqual(self.post("/analyses", dict(user_id=self.a.id)).status_code, 400)
+        self.assertEqual(self.post("/analyses", dict(user_id=999, text="food")).status_code, 400)
+        self.assertEqual(self.post("/analyses", dict(user_id=self.a.id, text="food", weight=-1)).status_code, 400)
+        self.assertEqual(self.post("/analyses", dict(user_id=self.a.id, text="food", image_data="not base64")).status_code, 400)
+        self.assertEqual(Meal.query.count(), 0)
+
+    def test_delete_cleans_details(self):
+        saved = self.save(self.start()).json
+        response = self.client.delete(f"/api/v2/meals/{saved['id']}", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Meal.query.count(), 0)
+
+
+class CalculationTests(unittest.TestCase):
+    def test_score_is_fixed_and_portion_invariant(self):
+        original = result()
+        self.assertEqual(original["score"]["value"], 75)
+        for item in original["ingredients"]:
+            item["grams"] *= .7
+        scaled = engine.calculate(original)
+        self.assertEqual(scaled["score"]["value"], 75)
+        self.assertEqual(scaled["totals"]["calories"], 91)
+
+    def test_invalid_nutrients_rejected(self):
+        for value in [-1, float("nan"), float("inf"), True]:
+            with self.assertRaises(ValueError):
+                engine.positive(value, "calories")
+        data = result()
+        data["ingredients"][0]["per_100g"]["calories"] = 900
+        with self.assertRaises(ValueError): engine.calculate(data)
+
+    def test_photo_transcoded_and_metadata_removed(self):
+        buffer = io.BytesIO(); Image.new("RGB", (1800, 900)).save(buffer, "PNG")
+        normalized = engine.normalize_photo(base64.b64encode(buffer.getvalue()).decode())
+        photo = Image.open(io.BytesIO(base64.b64decode(normalized)))
+        self.assertEqual(photo.format, "JPEG"); self.assertEqual(photo.size, (1280, 640))
+
+    def test_provider_receives_photo_and_schema_and_no_storage(self):
+        payload = result()
+        for key in ["totals", "score", "tags", "weight"]: payload.pop(key)
+        import json
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}), patch("requests.post") as post:
+            post.return_value.ok = True
+            post.return_value.json.return_value = dict(status="completed", output=[dict(type="message", content=[dict(type="output_text", text=json.dumps(payload))])])
+            output = engine.analyze(dict(text="Oats", weight=200), "test-photo")
+            self.assertEqual(output["totals"]["calories"], 130)
+            sent = post.call_args.kwargs["json"]
+            self.assertFalse(sent["store"])
+            self.assertTrue(sent["text"]["format"]["strict"])
+            self.assertEqual(sent["input"][0]["content"][1]["type"], "input_image")
+
+
+if __name__ == "__main__": unittest.main()

@@ -42,4 +42,10 @@ ENV/
 
 # Temporary files
 /tmp/
-uploads/ 
+uploads/
+.venv/
+.gradle/
+.kotlin/
+local.properties
+*.jks
+*.keystore

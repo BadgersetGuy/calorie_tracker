@@ -1,0 +1,506 @@
+package com.badgerset.meals
+
+import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import androidx.compose.runtime.*
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.KeyStore
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.util.UUID
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
+fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }
+fun JSONObject.number(key: String): String = "%.0f".format(optDouble(key, 0.0))
+
+private class TokenVault {
+    private fun key(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey("household-token", null) as? SecretKey)?.let { return it }
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+            init(KeyGenParameterSpec.Builder("household-token", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+        }.generateKey()
+    }
+    fun encrypt(value: String): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        return Base64.encodeToString(cipher.iv + cipher.doFinal(value.toByteArray()), Base64.NO_WRAP)
+    }
+    fun decrypt(value: String): String = runCatching {
+        val bytes = Base64.decode(value, Base64.NO_WRAP)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12))) }
+        String(cipher.doFinal(bytes.copyOfRange(12, bytes.size)))
+    }.getOrDefault("")
+}
+
+class MealViewModel(application: Application) : AndroidViewModel(application) {
+    private data class MealPage(val meals: List<JSONObject>, val total: Int, val loadedAt: Long, val summary: JSONObject? = null)
+    private data class PhotoEntry(val bitmap: Bitmap, val loadedAt: Long)
+    private val pages = mutableMapOf<String, MealPage>()
+    private val trendPages = mutableMapOf<String, Pair<JSONObject, Long>>()
+    var daySummary by mutableStateOf<JSONObject?>(null)
+    var trends by mutableStateOf<JSONObject?>(null)
+    var trendDays by mutableIntStateOf(30)
+    private val ideaPages = mutableMapOf<Int, Pair<JSONObject, Long>>()
+    private val photos = object : android.util.LruCache<String, PhotoEntry>(8192) {
+        override fun sizeOf(key: String, value: PhotoEntry) = (value.bitmap.byteCount / 1024).coerceAtLeast(1)
+    }
+    private var readJob: Job? = null
+    private var readGeneration = 0
+    var loading by mutableStateOf(false)
+    var mealDetailLoading by mutableStateOf(false)
+    var photoEpoch by mutableIntStateOf(0)
+        private set
+    private val prefs = application.getSharedPreferences("meals", 0)
+    private val vault = TokenVault()
+    var server by mutableStateOf(prefs.getString("server", "https://calorie-tracker-billowing-rain-2129.fly.dev")!!)
+    var token by mutableStateOf(vault.decrypt(prefs.getString("token", "")!!))
+    var connected by mutableStateOf(false)
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<String?>(null)
+    var tab by mutableIntStateOf(0)
+    var profiles by mutableStateOf(emptyList<JSONObject>())
+    var profileId by mutableIntStateOf(prefs.getInt("profile", 0))
+    var meals by mutableStateOf(emptyList<JSONObject>())
+    var historyDate by mutableStateOf(LocalDate.now())
+    var historyAll by mutableStateOf(true)
+    var historySearch by mutableStateOf("")
+    var historyTotal by mutableIntStateOf(0)
+    var ideas by mutableStateOf<JSONObject?>(null)
+    var weightRecords by mutableStateOf(emptyList<JSONObject>())
+    var avoidIngredients by mutableStateOf("")
+    private var ideaRequestKey = UUID.randomUUID().toString()
+    private var ideaRequestContext = ""
+    var eatenAt by mutableStateOf(prefs.getString("eatenAt", null)?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() } ?: OffsetDateTime.now())
+    var eatingTimezone by mutableStateOf(prefs.getString("eatingTimezone", ZoneId.systemDefault().id)!!)
+    var description by mutableStateOf(prefs.getString("description", "")!!)
+    var weight by mutableStateOf(prefs.getString("weight", "")!!)
+    var photoUri by mutableStateOf(prefs.getString("photo", null)?.let(Uri::parse))
+    var cameraUri: Uri? = prefs.getString("camera", null)?.let(Uri::parse)
+    var draft by mutableStateOf<JSONObject?>(null)
+    var clarification by mutableStateOf("")
+    var mealDetail by mutableStateOf<JSONObject?>(null)
+    var copyMeal by mutableStateOf<JSONObject?>(null)
+    var copyKey = UUID.randomUUID().toString()
+    var editSource by mutableIntStateOf(prefs.getInt("editSource", 0))
+    val currentProfile get() = profiles.firstOrNull { it.getInt("id") == profileId }
+    val activeDate get() = if (tab == 2) historyDate else LocalDate.now()
+
+    init { if (token.isNotBlank()) connect() }
+
+    fun persistEntry() { prefs.edit().putString("description", description).putString("weight", weight)
+        .putString("photo", photoUri?.toString()).putInt("editSource", editSource).putString("eatenAt", eatenAt.toString()).putString("eatingTimezone", eatingTimezone).apply() }
+    fun rememberCamera(uri: Uri) { cameraUri = uri; prefs.edit().putString("camera", uri.toString()).apply() }
+
+    private suspend fun api(path: String, method: String = "GET", data: JSONObject? = null): String = withContext(Dispatchers.IO) {
+        val base = server.trim().trimEnd('/')
+        val url = URL(base + "/api/v2" + path)
+        require(url.protocol == "https" && url.userInfo == null) { "Use a secure HTTPS server address" }
+        val connection = url.openConnection() as HttpURLConnection
+        try {
+            connection.instanceFollowRedirects = false
+            connection.requestMethod = method
+            connection.connectTimeout = 15000
+            connection.readTimeout = 120000
+            connection.setRequestProperty("Authorization", "Bearer " + token.trim())
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("X-Meal-Client", "android-v2")
+            if (data != null) {
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(data.toString().toByteArray()) }
+            }
+            val status = connection.responseCode
+            val response = (if (status in 200..299) connection.inputStream else connection.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            if (status !in 200..299) {
+                val message = runCatching { JSONObject(response).optString("error") }.getOrNull()
+                throw IllegalStateException(message?.takeIf { it.isNotBlank() } ?: "Server returned $status. Check that the updated backend is deployed.")
+            }
+            response
+        } finally { connection.disconnect() }
+    }
+
+    private fun work(block: suspend () -> Unit) {
+        if (busy) return
+        readJob?.cancel(); readGeneration++; loading = false
+        busy = true; error = null; notice = null
+        viewModelScope.launch {
+            try { block() } catch (e: Exception) { error = e.message ?: "Could not connect. Please try again." }
+            finally { busy = false }
+        }
+    }
+
+    fun connect() = work {
+        require(token.isNotBlank()) { "Enter your household access token" }
+        require(URL(server.trim()).path.trim('/').isEmpty()) { "Enter the server origin without a path" }
+        val loaded = JSONArray(api("/profiles")).objects()
+        prefs.edit().putString("server", server.trim().trimEnd('/')).putString("token", vault.encrypt(token.trim())).apply()
+        profiles = loaded
+        pages.clear(); ideaPages.clear(); trendPages.clear(); clearPhotos()
+        if (profiles.none { it.getInt("id") == profileId }) profileId = profiles.firstOrNull()?.getInt("id") ?: 0
+        connected = true
+        if (profileId > 0) loadMeals()
+        prefs.getString("draft", null)?.let { id ->
+            draft = JSONObject(api("/analyses/$id"))
+            if (draft?.optInt("saved_meal_id", 0) != 0) resetEntry() else {
+                profileId = draft!!.getInt("user_id"); tab = 1
+            }
+        }
+    }
+
+    private fun pageKey() = "$profileId:$tab:$historyAll:$activeDate:$historySearch:${if (tab == 4) trendDays else 0}"
+    private fun invalidateMeals() { pages.clear(); ideaPages.clear(); trendPages.clear() }
+    private fun clearPhotos() { photos.evictAll(); photoEpoch++ }
+    private fun storePage(key: String, page: MealPage) {
+        pages[key] = page
+        while (pages.size > 16) pages.remove(pages.keys.first())
+    }
+    private suspend fun loadMeals() {
+        if (profileId == 0) { meals = emptyList(); return }
+        if (tab == 1) return
+        if (tab == 4) { loadTrends(); return }
+        if (tab == 3) { loadIdeas(); ideaPages[profileId] = ideas!! to System.currentTimeMillis(); return }
+        val key = pageKey()
+        if (tab == 2 && historyAll) {
+            val query = java.net.URLEncoder.encode(historySearch, "UTF-8")
+            val response = JSONObject(api("/history?user_id=$profileId&query=$query&view=summary"))
+            val page = MealPage(response.getJSONArray("meals").objects(), response.getInt("total"), System.currentTimeMillis())
+            storePage(key, page)
+            if (key == pageKey()) { meals = page.meals; historyTotal = page.total }
+            return
+        }
+        val offset = activeDate.atStartOfDay(ZoneId.systemDefault()).offset.totalSeconds / 60
+        val (result, summary) = coroutineScope {
+            val list = async { JSONArray(api("/meals?user_id=$profileId&date=$activeDate&offset_minutes=$offset&view=summary")).objects() }
+            val scores = async { JSONObject(api("/summaries?user_id=$profileId&date=$activeDate&timezone=${java.net.URLEncoder.encode(ZoneId.systemDefault().id, "UTF-8")}")).getJSONArray("days").getJSONObject(0) }
+            list.await() to scores.await()
+        }
+        storePage(key, MealPage(result, result.size, System.currentTimeMillis(), summary))
+        if (key == pageKey()) { meals = result; daySummary = summary }
+    }
+    fun refresh() = refreshMeals(true)
+    private fun refreshMeals(force: Boolean) {
+        if (busy || profileId == 0 || tab == 1) return
+        readJob?.cancel(); loading = false
+        val generation = ++readGeneration
+        val key = pageKey()
+        val cached = pages[key]
+        if (tab == 4) {
+            val stored = trendPages["$profileId:$trendDays"]
+            trends = stored?.first
+            if (!force && stored != null && System.currentTimeMillis() - stored.second < 30000) return
+        } else if (tab == 3) {
+            val stored = ideaPages[profileId]
+            ideas = stored?.first
+            avoidIngredients = stored?.first?.optJSONArray("avoid")?.strings()?.joinToString(", ") ?: prefs.getString("avoid-$profileId", "")!!
+            if (!force && stored != null && System.currentTimeMillis() - stored.second < 30000) return
+        } else {
+            daySummary = cached?.summary
+            meals = cached?.meals ?: emptyList()
+            historyTotal = cached?.total ?: 0
+            if (!force && cached != null && System.currentTimeMillis() - cached.loadedAt < 30000) return
+        }
+        loading = true; error = null
+        if (force) clearPhotos()
+        readJob = viewModelScope.launch {
+            try { loadMeals() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { if (generation == readGeneration) error = e.message ?: "Could not refresh meals" }
+            finally { if (generation == readGeneration) loading = false }
+        }
+    }
+    fun navigate(value: Int) { if (!busy) {
+        if (value == 1 && draft == null && description.isBlank() && photoUri == null && !prefs.contains("eatenAt")) {
+            eatenAt = OffsetDateTime.now(); eatingTimezone = ZoneId.systemDefault().id
+        }
+        readJob?.cancel(); loading = false
+        tab = value; refreshMeals(false)
+    } }
+    fun selectProfile(id: Int) {
+        if (busy || draft != null || editSource != 0) { error = "Save or discard your current analysis before switching profiles."; return }
+        profileId = id; ideas = null; meals = emptyList(); weightRecords = emptyList(); daySummary = null; trends = null
+        prefs.edit().putInt("profile", id).apply(); refreshMeals(false)
+    }
+    fun createProfile(name: String) = work {
+        require(draft == null && editSource == 0) { "Save or discard the current analysis before creating a profile." }
+        val record = JSONObject(api("/profiles", "POST", JSONObject().put("username", name)))
+        profiles = profiles + record; profileId = record.getInt("id"); meals = emptyList(); weightRecords = emptyList(); ideas = null; loadMeals()
+    }
+    fun setHistory(date: LocalDate) { if (!busy) { historyAll = false; historyDate = date; refresh() } }
+    fun showAllHistory() { if (!busy) { historyAll = true; refresh() } }
+    fun setTrendRange(days: Int) { if (!busy && days in listOf(7, 30, 90)) { trendDays = days; refreshMeals(false) } }
+    private suspend fun loadTrends() {
+        val person = profileId
+        val count = trendDays
+        val end = LocalDate.now()
+        val start = end.minusDays(count.toLong() - 1)
+        val zone = java.net.URLEncoder.encode(ZoneId.systemDefault().id, "UTF-8")
+        val report = JSONObject(api("/summaries?user_id=$person&start=$start&end=$end&timezone=$zone"))
+        trendPages["$person:$count"] = report to System.currentTimeMillis()
+        while (trendPages.size > 12) trendPages.remove(trendPages.keys.first())
+        if (profileId == person && trendDays == count && tab == 4) trends = report
+    }
+    fun moreHistory() = work {
+        val query = java.net.URLEncoder.encode(historySearch, "UTF-8")
+        val response = JSONObject(api("/history?user_id=$profileId&query=$query&offset=${meals.size}&view=summary"))
+        meals = (meals + response.getJSONArray("meals").objects()).distinctBy { it.getInt("id") }
+        historyTotal = response.getInt("total")
+        storePage(pageKey(), MealPage(meals, historyTotal, System.currentTimeMillis()))
+    }
+    fun openMeal(meal: JSONObject) = work {
+        mealDetailLoading = true; mealDetail = meal
+        try { mealDetail = JSONObject(api("/meals/${meal.getInt("id")}?include_images=false")) }
+        catch (e: Exception) { mealDetail = null; throw e }
+        finally { mealDetailLoading = false }
+    }
+    suspend fun mealPhoto(id: Int, preview: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
+        val origin = server.trim().trimEnd('/')
+        val credential = token.trim()
+        val key = "$origin:$id:$preview"
+        photos.get(key)?.let { if (System.currentTimeMillis() - it.loadedAt < 300000) return@withContext it.bitmap }
+        val url = URL("$origin/api/v2/meals/$id/photo?size=${if (preview) "preview" else "thumbnail"}")
+        require(url.protocol == "https" && url.userInfo == null)
+        val connection = url.openConnection() as HttpURLConnection
+        try {
+            connection.instanceFollowRedirects = false; connection.connectTimeout = 15000; connection.readTimeout = 30000
+            connection.setRequestProperty("Authorization", "Bearer $credential")
+            if (connection.responseCode != 200) return@withContext null
+            val bytes = connection.inputStream.use { it.readBytes() }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            val limit = if (preview) 1280 else 192
+            val options = BitmapFactory.Options().apply { inSampleSize = 1; while (maxOf(bounds.outWidth, bounds.outHeight) / inSampleSize > limit * 2) inSampleSize *= 2 }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return@withContext null
+            if (credential == token.trim() && origin == server.trim().trimEnd('/')) photos.put(key, PhotoEntry(bitmap, System.currentTimeMillis()))
+            bitmap
+        } finally { connection.disconnect() }
+    }
+    fun saveTargets(values: JSONObject) = work {
+        api("/profiles/$profileId/targets", "PUT", values)
+        profiles = JSONArray(api("/profiles")).objects(); notice = "Daily targets saved"
+    }
+    fun refreshWeights() = work { weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects() }
+    fun saveBodyWeight(kg: String, existing: JSONObject?) = work {
+        val value = kg.toDoubleOrNull()
+        require(value != null && value > 0 && value <= 700) { "Enter body weight in kilograms" }
+        val data = JSONObject().put("weight_kg", value).put("notes", existing?.optString("notes") ?: "")
+            .put("recorded_at", existing?.getString("recorded_at") ?: OffsetDateTime.now().toString())
+        if (existing == null) {
+            data.put("user_id", profileId).put("request_key", UUID.randomUUID().toString())
+            api("/weights", "POST", data)
+        } else {
+            data.put("revision", existing.getInt("revision")); api("/weights/${existing.getString("id")}", "PUT", data)
+        }
+        weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects()
+        trendPages.clear(); if (tab == 4) loadTrends()
+        notice = "Body weight saved"
+    }
+    fun deleteBodyWeight(existing: JSONObject) = work {
+        api("/weights/${existing.getString("id")}", "DELETE", JSONObject().put("revision", existing.getInt("revision")))
+        weightRecords = JSONObject(api("/weights?user_id=$profileId&limit=30")).getJSONArray("weights").objects()
+        trendPages.clear(); if (tab == 4) loadTrends()
+    }
+    fun changePhoto(uri: Uri?) { if (!busy) { photoUri = uri; persistEntry() } }
+
+    private suspend fun encodedPhoto(): String? = withContext(Dispatchers.IO) {
+        val uri = photoUri ?: return@withContext null
+        val resolver = getApplication<Application>().contentResolver
+        val bitmap = if (android.os.Build.VERSION.SDK_INT >= 28) {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val factor = (1280.0 / maxOf(info.size.width, info.size.height)).coerceAtMost(1.0)
+                decoder.setTargetSize((info.size.width * factor).toInt(), (info.size.height * factor).toInt())
+            }
+        } else {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2400) sample *= 2
+            val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            val raw = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, options) }
+                ?: error("Unable to read this photo")
+            val orientation = resolver.openInputStream(uri)?.use {
+                androidx.exifinterface.media.ExifInterface(it).getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, 1)
+            } ?: 1
+            val matrix = android.graphics.Matrix().apply {
+                when (orientation) {
+                    2 -> setScale(-1f, 1f)
+                    3 -> setRotate(180f)
+                    4 -> setScale(1f, -1f)
+                    5 -> { setRotate(90f); postScale(-1f, 1f) }
+                    6 -> setRotate(90f)
+                    7 -> { setRotate(270f); postScale(-1f, 1f) }
+                    8 -> setRotate(270f)
+                }
+            }
+            val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+            if (rotated !== raw) raw.recycle()
+            rotated
+        }
+        val ratio = (1280.0 / maxOf(bitmap.width, bitmap.height)).coerceAtMost(1.0)
+        var resized = Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+        val buffer = ByteArrayOutputStream()
+        var quality = 78
+        while (true) {
+            buffer.reset()
+            check(resized.compress(Bitmap.CompressFormat.JPEG, quality, buffer)) { "Could not encode this photo" }
+            if (buffer.size() <= 200 * 1024) break
+            if (quality > 62) quality -= 8
+            else {
+                val smaller = Bitmap.createScaledBitmap(resized, (resized.width * .8).toInt().coerceAtLeast(1), (resized.height * .8).toInt().coerceAtLeast(1), true)
+                if (resized !== bitmap) resized.recycle()
+                resized = smaller; quality = 78
+            }
+        }
+        if (resized !== bitmap) resized.recycle()
+        bitmap.recycle()
+        Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP)
+    }
+
+    fun analyze() = work {
+        require(profileId > 0) { "Create or select a profile first" }
+        val data = JSONObject().put("user_id", profileId).put("text", description)
+        if (weight.isNotBlank()) {
+            val grams = weight.toDoubleOrNull()
+            require(grams != null && grams > 0) { "Enter a valid weight, or leave it empty" }
+            data.put("weight", grams)
+        }
+        encodedPhoto()?.let { data.put("image_data", it) }
+        if (editSource > 0) data.put("source_meal_id", editSource)
+        draft = JSONObject(api("/analyses", "POST", data))
+        prefs.edit().putString("draft", draft!!.getString("id")).apply()
+    }
+    fun clarify() = work {
+        submitClarification(clarification)
+    }
+    private suspend fun submitClarification(message: String) {
+        val current = draft ?: return
+        val data = JSONObject().put("revision", current.getInt("revision")).put("text", message)
+        draft = JSONObject(api("/analyses/${current.getString("id")}/clarifications", "POST", data))
+        clarification = ""
+    }
+    fun updateIngredients(items: JSONArray, onApplied: () -> Unit) = work {
+        val current = draft ?: return@work
+        val data = JSONObject().put("revision", current.getInt("revision")).put("items", items)
+        draft = JSONObject(api("/analyses/${current.getString("id")}/ingredients", "PUT", data))
+        onApplied()
+    }
+    fun addIngredient(name: String, grams: Double, onApplied: () -> Unit) = work {
+        require(name.isNotBlank() && grams.isFinite() && grams > 0 && grams <= 20000) { "Enter an item name and positive grams" }
+        submitClarification("Add this food to the CURRENT ingredient list: ${name.trim()}, $grams grams. Keep all existing components, their grams and nutrient densities unchanged. Estimate the added food, asking a short clarification if needed.")
+        onApplied()
+    }
+    fun reloadDraft() = work { draft?.let { draft = JSONObject(api("/analyses/${it.getString("id")}")) } }
+    fun save() = work {
+        val current = draft ?: return@work
+        val data = JSONObject().put("revision", current.getInt("revision")).put("eaten_at", eatenAt.toString()).put("timezone", eatingTimezone)
+        if (editSource > 0) data.put("replace_meal_id", editSource)
+        api("/analyses/${current.getString("id")}/save", "POST", data)
+        invalidateMeals(); if (editSource > 0) clearPhotos()
+        resetEntry(); tab = 0; loadMeals(); notice = "Meal saved"
+    }
+    fun resetEntry() {
+        draft = null; description = ""; weight = ""; photoUri = null; clarification = ""; editSource = 0
+        eatenAt = OffsetDateTime.now()
+        eatingTimezone = ZoneId.systemDefault().id
+        prefs.edit().remove("draft").remove("description").remove("weight").remove("photo").remove("editSource").remove("eatenAt").remove("eatingTimezone").apply()
+    }
+    fun reanalyze(meal: JSONObject) {
+        if (draft != null || description.isNotBlank() || photoUri != null) { error = "Save or discard your current entry first."; return }
+        profileId = meal.getInt("user_id"); editSource = meal.getInt("id")
+        val timing = meal.optJSONObject("discipline")
+        eatingTimezone = timing?.optString("timezone")?.takeIf { it.isNotBlank() } ?: ZoneId.systemDefault().id
+        eatenAt = OffsetDateTime.parse(meal.getString("date")).atZoneSameInstant(ZoneId.of(eatingTimezone)).toOffsetDateTime()
+        description = meal.getString("description"); mealDetail = null; tab = 1; persistEntry()
+    }
+    fun editMealItems(meal: JSONObject) {
+        if (draft != null || description.isNotBlank() || photoUri != null) { error = "Save or discard your current entry first."; return }
+        reanalyze(meal)
+        work {
+            val data = JSONObject().put("user_id", profileId).put("source_meal_id", editSource)
+                .put("text", description).put("use_existing_analysis", true)
+            draft = JSONObject(api("/analyses", "POST", data))
+            prefs.edit().putString("draft", draft!!.getString("id")).apply()
+        }
+    }
+    fun openCopy(meal: JSONObject) { copyMeal = meal; copyKey = UUID.randomUUID().toString() }
+    fun copyTo(target: Int, amount: String, byWeight: Boolean, date: LocalDate, time: java.time.LocalTime) = work {
+        val meal = copyMeal ?: return@work
+        val value = amount.toDoubleOrNull()
+        require(value != null && value > 0) { "Enter a positive portion" }
+        val data = JSONObject().put("user_id", target).put(if (byWeight) "weight" else "portion_percent", value)
+            .put("eaten_at", date.atTime(time).atZone(ZoneId.systemDefault()).toOffsetDateTime().toString())
+            .put("timezone", ZoneId.systemDefault().id)
+            .put("request_key", copyKey)
+        api("/meals/${meal.getInt("id")}/copy", "POST", data)
+        invalidateMeals(); copyMeal = null; mealDetail = null; loadMeals(); notice = "Meal copied"
+    }
+    fun deleteMeal(meal: JSONObject) = work {
+        api("/meals/${meal.getInt("id")}", "DELETE"); invalidateMeals(); clearPhotos(); mealDetail = null; loadMeals(); notice = "Meal deleted"
+    }
+    fun setEatingTime(date: LocalDate, time: java.time.LocalTime) {
+        eatenAt = date.atTime(time).atZone(ZoneId.of(eatingTimezone)).toOffsetDateTime(); persistEntry()
+    }
+    private suspend fun loadIdeas() {
+        avoidIngredients = prefs.getString("avoid-$profileId", "")!!
+        ideas = JSONObject(api("/suggestions?user_id=$profileId"))
+        if (ideas!!.has("id")) avoidIngredients = ideas!!.optJSONArray("avoid")?.strings()?.joinToString(", ") ?: ""
+        if (!ideas!!.has("id") || ideas!!.optBoolean("needs_refresh")) generateIdeas()
+    }
+    private suspend fun generateIdeas() {
+        val requestContext = "$profileId:$avoidIngredients"
+        if (requestContext != ideaRequestContext) { ideaRequestContext = requestContext; ideaRequestKey = UUID.randomUUID().toString() }
+        val avoid = JSONArray(avoidIngredients.split(',').map { it.trim() }.filter { it.isNotEmpty() })
+        val data = JSONObject().put("user_id", profileId).put("avoid", avoid).put("request_key", ideaRequestKey)
+        ideas = JSONObject(api("/suggestions", "POST", data))
+        prefs.edit().putString("avoid-$profileId", avoidIngredients).apply()
+        ideaRequestKey = UUID.randomUUID().toString()
+    }
+    fun newIdeas() = work { generateIdeas() }
+    fun ideaFeedback(id: String, action: String) = work {
+        api("/suggestions/$id/feedback", "PUT", JSONObject().put("user_id", profileId).put("action", action))
+        ideas = JSONObject(api("/suggestions?user_id=$profileId"))
+    }
+    fun clearIdeaFeedback() = work {
+        api("/suggestions/feedback", "DELETE", JSONObject().put("user_id", profileId))
+        ideas = JSONObject(api("/suggestions?user_id=$profileId"))
+        notice = "Likes and skips reset for this profile"
+    }
+    fun useIdea(idea: JSONObject) {
+        if (draft != null || description.isNotBlank() || photoUri != null) { error = "Save or discard your current entry before starting another meal."; return }
+        resetEntry()
+        description = idea.getString("title") + ". Ingredients: " + idea.getJSONArray("ingredients").strings().joinToString() + ". I'll specify my actual portion."
+        persistEntry(); tab = 1
+    }
+    fun disconnect() {
+        if (busy) return
+        connected = false; daySummary = null; trends = null; token = ""; profiles = emptyList(); meals = emptyList(); weightRecords = emptyList(); mealDetail = null; ideas = null
+        readJob?.cancel(); loading = false; pages.clear(); ideaPages.clear(); trendPages.clear(); clearPhotos()
+        resetEntry(); prefs.edit().remove("token").remove("profile").apply()
+    }
+}

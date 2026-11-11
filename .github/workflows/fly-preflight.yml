@@ -1,0 +1,53 @@
+name: Fly deployment preflight
+on:
+  push:
+    branches: [codex/android-meal-tracker]
+    paths: [.github/workflows/fly-preflight.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      MOBILE_API_TOKEN: ${{ secrets.MOBILE_API_TOKEN }}
+    steps:
+      - name: Check deployment credential
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo '::error::FLY_API_TOKEN is not configured as a repository Actions secret.'
+            exit 1
+          fi
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: '0.5.6'
+      - name: Inspect the existing app without changing it
+        shell: python
+        run: |
+          import json, os, subprocess
+          app = 'calorie-tracker-billowing-rain-2129'
+          def read(args):
+              result = subprocess.run(['flyctl', *args, '--app', app, '--json'], capture_output=True, text=True)
+              if result.returncode:
+                  message = result.stderr.replace(os.environ['FLY_API_TOKEN'], '[redacted]')
+                  raise SystemExit('Fly read failed: ' + message[-1500:])
+              return json.loads(result.stdout)
+          machines = read(['machine', 'list'])
+          secrets = read(['secrets', 'list'])
+          eligible = []
+          for machine in machines:
+              config = machine.get('config', {})
+              mounts = config.get('mounts', [])
+              if any(m.get('path') == '/data' for m in mounts):
+                  eligible.append(machine)
+          secret_names = {s.get('Name', s.get('name')) for s in secrets}
+          print(json.dumps({
+              'app_access_verified': True,
+              'machine_count': len(machines),
+              'machines_with_data_volume': len(eligible),
+              'openai_secret_present': 'OPENAI_API_KEY' in secret_names,
+              'household_secret_present_on_fly': 'MOBILE_API_TOKEN' in secret_names,
+              'household_secret_supplied_in_actions': bool(os.getenv('MOBILE_API_TOKEN')),
+              'production_changed': False
+          }))

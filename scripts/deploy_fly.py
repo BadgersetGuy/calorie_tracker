@@ -1,0 +1,226 @@
+"""Deploy the existing single-volume app without exporting data or credentials."""
+import base64
+import copy
+import gzip
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import tempfile
+import time
+import tomllib
+import uuid
+from urllib.request import urlopen
+import tomli_w
+
+APP = "calorie-tracker-billowing-rain-2129"
+ORIGIN = "https://" + APP + ".fly.dev"
+ROOT = Path(__file__).resolve().parents[1]
+
+def run(args, *, stdin=None, timeout=1800):
+    result = subprocess.run(["flyctl", *args, "--app", APP], input=stdin, text=True,
+        capture_output=True, timeout=timeout, cwd=ROOT)
+    if result.returncode:
+        # Never dump a full config, remote output or HTTP request into public CI logs.
+        error = result.stderr
+        for name in ("FLY_API_TOKEN", "MOBILE_API_TOKEN"):
+            if os.getenv(name): error = error.replace(os.environ[name], "[redacted]")
+        raise RuntimeError("Fly command failed: " + " ".join(args[:2]) + "; " + error[-1200:])
+    return result.stdout
+
+def machines():
+    return json.loads(run(["machine", "list", "--json"]))
+
+def primary(items):
+    if len(items) != 1:
+        raise RuntimeError("Expected one existing Machine; refusing an unreviewed multi-Machine SQLite deployment")
+    machine = items[0]
+    mounts = machine.get("config", {}).get("mounts", [])
+    selected = [m for m in mounts if m.get("path") == "/data" and m.get("volume")]
+    if len(selected) != 1:
+        raise RuntimeError("Expected the existing /data volume; refusing to deploy without it")
+    return machine, selected[0]["volume"]
+
+def approved_storage_extension(machine, volume, target):
+    if not target: return
+    if target != "2": raise RuntimeError("Only the reviewed 2-GB storage target is supported")
+    before = json.loads(run(["volumes", "show", volume, "--json"]))
+    if before.get("size_gb") not in (1, 2):
+        raise RuntimeError("Storage size differs from the reviewed 1-to-2-GB extension")
+    if before["size_gb"] == 1:
+        run(["volumes", "extend", volume, "--size", "2", "--yes"])
+    after = json.loads(run(["volumes", "show", volume, "--json"]))
+    current, current_volume = primary(machines())
+    if after.get("size_gb") != 2 or current_volume != volume or current["id"] != machine["id"]:
+        raise RuntimeError("Extended storage size or existing mount identity was not confirmed")
+    print("Owner-approved 2-GB capacity confirmed on the existing volume", flush=True)
+
+def remote(machine_id, *args):
+    def keep_awake():
+        # Exec activity does not count as HTTP traffic for Fly's idle auto-stop.
+        try:
+            with urlopen(ORIGIN + "/", timeout=10): pass
+        except Exception: pass
+    keep_awake()
+    source = gzip.compress((ROOT / "scripts/fly_sqlite_guard.py").read_bytes())
+    expression = "exec(__import__('gzip').decompress(__import__('base64').b64decode('" + base64.b64encode(source).decode() + "')))"
+    result_path = "/tmp/meal-deploy-" + uuid.uuid4().hex + ".json"
+    # Fly's HTTP exec gateway can time out before its command timeout. Run the
+    # potentially long backup/provider check privately, then poll a small result.
+    worker = '''import json, os, subprocess, tempfile
+try:
+    process = subprocess.run(COMMAND, capture_output=True, text=True, timeout=540)
+    result = {"exit_code": process.returncode, "stdout": process.stdout}
+except Exception:
+    result = {"exit_code": 1, "stdout": ""}
+fd, temporary = tempfile.mkstemp(prefix="meal-deploy-", dir="/tmp")
+with os.fdopen(fd, "w") as stream:
+    json.dump(result, stream)
+os.replace(temporary, RESULT_PATH)
+'''.replace("COMMAND", repr(["python", "-c", expression, *args])).replace("RESULT_PATH", repr(result_path))
+    launch = "import subprocess; subprocess.Popen(['python', '-c', " + repr(worker) + "], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); print('{}')"
+    response = json.loads(run(["machine", "exec", machine_id, shlex.join(["python", "-c", launch]), "--json"], timeout=90))
+    if response.get("exit_code", 0): raise RuntimeError("Could not start the private remote check")
+    quoted_path = shlex.quote(result_path)
+    # Polling must not start another Python interpreter on a 256-MiB app Machine.
+    poll = f"if test -f {quoted_path}; then cat {quoted_path}; else printf null; fi"
+    failures = 0
+    for _ in range(120):
+        time.sleep(5)
+        keep_awake()
+        try:
+            response = json.loads(run(["machine", "exec", machine_id, shlex.join(["sh", "-c", poll]), "--json"], timeout=90))
+            failures = 0
+        except RuntimeError as error:
+            if any(value in str(error).lower() for value in ("deadline", "408", "502", "503", "connection reset")) and failures < 4:
+                failures += 1
+                continue
+            raise
+        if response.get("exit_code", 0): raise RuntimeError("Could not read the private remote check")
+        completed = json.loads(response["stdout"])
+        if completed is None: continue
+        if completed["exit_code"]:
+            raise RuntimeError("Remote check failed; private remote output was not published")
+        result = json.loads(completed["stdout"])
+        if result.get("guard_error"): raise RuntimeError("Remote guard: " + result["guard_error"])
+        cleanup = shlex.join(["rm", "-f", result_path])
+        try: run(["machine", "exec", machine_id, cleanup, "--json"], timeout=90)
+        except RuntimeError: pass
+        return result
+    raise RuntimeError("Private remote check timed out")
+
+def configuration(original, sha, model):
+    config = copy.deepcopy(original)
+    if config.get("app") != APP: raise RuntimeError("Saved Fly configuration targets a different app")
+    ports = {int(s["internal_port"]) for s in config.get("services", []) if "internal_port" in s}
+    if "http_service" in config: ports.add(int(config["http_service"]["internal_port"]))
+    if len(ports) != 1: raise RuntimeError("Expected one application HTTP port")
+    port = ports.pop()
+    mounts = config.get("mounts", [])
+    if isinstance(mounts, dict): mounts = [mounts]
+    if not any(m.get("destination") == "/data" and m.get("source") for m in mounts):
+        raise RuntimeError("Saved configuration does not preserve the data mount")
+    groups = list(config.get("processes", {})) or ["app"]
+    if len(groups) != 1: raise RuntimeError("Multiple process groups need a reviewed deployment plan")
+    # Initialize additive tables once before workers import the application in parallel.
+    command = f'python -c "import app" && exec gunicorn --bind 0.0.0.0:{port} --workers 2 --timeout 150 app:app'
+    config["processes"] = {groups[0]: shlex.join(["sh", "-c", command])}
+    config["env"] = dict(config.get("env", {}), PORT=str(port), RELEASE_COMMIT=sha,
+        HOUSEHOLD_TIMEZONE=config.get("env", {}).get("HOUSEHOLD_TIMEZONE", "Europe/Bucharest"),
+        MEAL_ANALYSIS_MODEL=model, PUBLIC_API_URL=ORIGIN)
+    # Owner selected an always-warm single server to avoid idle wake-up latency.
+    for service in config.get("services", []):
+        service.update(auto_stop_machines="off", auto_start_machines=True, min_machines_running=1)
+    if "http_service" in config:
+        config["http_service"].update(auto_stop_machines="off", auto_start_machines=True, min_machines_running=1)
+    config["build"] = {"dockerfile": "Dockerfile"}
+    config.setdefault("deploy", {}).pop("release_command", None)
+    return config, port
+
+def wait_for_release(machine_id, volume, sha):
+    starts = 0
+    stopped_reads = 0
+    for _ in range(40):
+        current, mounted = primary(machines())
+        if current["id"] != machine_id or mounted != volume:
+            raise RuntimeError("Updated Machine or data mount identity changed")
+        state = current["state"]
+        if state == "stopped":
+            if starts == 0:
+                run(["machine", "start", machine_id]); starts += 1
+            else:
+                stopped_reads += 1
+                if stopped_reads >= 3:
+                    raise RuntimeError("Updated Machine repeatedly exited after startup")
+        elif state == "started":
+            stopped_reads = 0
+            try:
+                with urlopen(ORIGIN + "/health", timeout=5) as response:
+                    health = json.loads(response.read())
+                if health.get("release") == sha and health.get("status") == "ok": return
+            except Exception: pass
+        elif state in ("destroyed", "destroying", "failed"):
+            raise RuntimeError("Updated Machine failed to start")
+        # Updating/stopping/starting are normal transitions, not failed boots.
+        time.sleep(2)
+    raise RuntimeError("Public health did not confirm the deployed revision")
+
+def main():
+    if not os.getenv("FLY_API_TOKEN"): raise RuntimeError("FLY_API_TOKEN is required")
+    household_token = os.getenv("MOBILE_API_TOKEN", "").strip()
+    if len(household_token) < 32:
+        raise RuntimeError("Add a separate MOBILE_API_TOKEN repository Actions secret with at least 32 random characters")
+    if household_token == os.environ["FLY_API_TOKEN"].strip():
+        raise RuntimeError("MOBILE_API_TOKEN must differ from the Fly deployment credential")
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    machine, volume = primary(machines())
+    if machine["state"] != "started":
+        run(["machine", "start", machine["id"]])
+        for _ in range(30):
+            machine, _ = primary(machines())
+            if machine["state"] == "started": break
+            time.sleep(2)
+        else: raise RuntimeError("Existing Machine did not start")
+    print("Existing Machine and persistent data mount verified", flush=True)
+    approved_storage_extension(machine, volume, os.getenv("APPROVED_VOLUME_SIZE_GB", ""))
+    model = remote(machine["id"], "model")["model"]
+    print("Provider vision access verified for " + model, flush=True)
+    backup = remote(machine["id"], "backup")
+    if backup.get("integrity") != "ok": raise RuntimeError("Backup integrity was not confirmed")
+    print("Private SQLite backup confirmed and verified on the Fly volume", flush=True)
+    run(["volumes", "snapshots", "create", volume])
+    print("Additional Fly volume snapshot requested", flush=True)
+    with tempfile.TemporaryDirectory(prefix="fly-deploy-") as folder, tempfile.NamedTemporaryFile(
+            prefix=".fly-deploy-", suffix=".toml", dir=ROOT) as deploy_config:
+        folder = Path(folder)
+        old = folder / "previous.toml"
+        old.write_text('app = "' + APP + '"\n')
+        old.chmod(0o600)
+        run(["config", "save", "--config", str(old), "--yes"])
+        original = tomllib.loads(old.read_text())
+        config, port = configuration(original, sha, model)
+        # Fly resolves Dockerfile paths relative to this file even with an explicit
+        # build context. Keep the generated config beside the actual Dockerfile.
+        updated = Path(deploy_config.name)
+        updated.write_text(tomli_w.dumps(config)); updated.chmod(0o600)
+        # Explicitly rotate any earlier reused value to the separate household token.
+        run(["secrets", "set", "MOBILE_API_TOKEN=-", "--stage"], stdin=household_token)
+        previous_image = machine["config"]["image"]
+        try:
+            print("Building and deploying the reviewed backend; a brief restart is expected", flush=True)
+            run(["deploy", str(ROOT), "--config", str(updated),
+                "--local-only", "--ha=false", "--strategy", "immediate", "--wait-timeout", "300", "--yes"], timeout=1500)
+            after, after_volume = primary(machines())
+            if after_volume != volume: raise RuntimeError("Data volume identity changed")
+            wait_for_release(after["id"], volume, sha)
+            verification = remote(after["id"], "verify", backup.get("manifest_path") or backup["backup_path"].rsplit(".", 1)[0] + ".json", str(port))
+            if not verification.get("records_preserved"): raise RuntimeError("Record preservation was not confirmed")
+        except Exception:
+            print("Deployment verification failed; restoring the previous application image without restoring/overwriting data", flush=True)
+            run(["deploy", "--config", str(old), "--image", previous_image,
+                "--ha=false", "--strategy", "immediate", "--wait-timeout", "300", "--yes"], timeout=600)
+            raise
+    print("Deployment verified: health, original data volume, database integrity, preserved records and authenticated profiles", flush=True)
+
+if __name__ == "__main__": main()

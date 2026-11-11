@@ -1,0 +1,256 @@
+import copy
+import hashlib
+import gzip
+import json
+import os
+from pathlib import Path
+import shlex
+import sqlite3
+import subprocess
+import sys
+import shutil
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from scripts import deploy_fly, fly_sqlite_guard as guard
+from scripts import keep_fly_warm
+
+
+class DeploymentSafetyTests(unittest.TestCase):
+    def test_rollout_waits_for_transitions_and_starts_stopped_replacement(self):
+        machine = dict(id="same", config=dict(mounts=[dict(path="/data", volume="volume")]))
+        states = [dict(machine, state=state) for state in ("stopping", "stopped", "starting", "started")]
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return b'{"release":"new","status":"ok"}'
+        with patch.object(deploy_fly, "machines", side_effect=[[m] for m in states]), patch.object(deploy_fly, "run") as run, patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", return_value=Response()):
+            deploy_fly.wait_for_release("same", "volume", "new")
+            run.assert_called_once_with(["machine", "start", "same"])
+
+    def test_rollout_rejects_repeated_exit_or_volume_change(self):
+        machine = dict(id="same", state="stopped", config=dict(mounts=[dict(path="/data", volume="volume")]))
+        with patch.object(deploy_fly, "machines", return_value=[machine]), patch.object(deploy_fly, "run") as run, patch.object(deploy_fly.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "repeatedly exited"):
+                deploy_fly.wait_for_release("same", "volume", "new")
+            run.assert_called_once()
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                deploy_fly.wait_for_release("same", "other-volume", "new")
+
+    def test_container_packaged_files_can_boot_the_application(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            for line in (root / "Dockerfile").read_text().splitlines():
+                parts = shlex.split(line)
+                if not parts or parts[0] != "COPY": continue
+                for name in parts[1:-1]:
+                    source = root / name
+                    if source.is_dir(): shutil.copytree(source, target / source.name)
+                    else: shutil.copyfile(source, target / source.name)
+            code = "import sys; sys.path.insert(0, sys.argv[1]); from app import app; assert app.test_client().get('/health').status_code == 200"
+            environment = dict(os.environ, DATABASE_URL="sqlite:///" + str(target / "packaging.db"), OPENAI_API_KEY="", MOBILE_API_TOKEN="packaging-test")
+            result = subprocess.run([sys.executable, "-I", "-c", code, str(target)], cwd=target,
+                env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_warm_policy_compares_image_content_after_reference_normalization(self):
+        before = dict(config=dict(image="registry/app:tag"), image_ref=dict(digest="sha256:same-content"))
+        after = dict(config=dict(image="registry/app@sha256:same-content"), image_ref=dict(digest="sha256:same-content"))
+        self.assertTrue(keep_fly_warm.same_image(before, after))
+        after["image_ref"]["digest"] = "sha256:different-content"
+        self.assertFalse(keep_fly_warm.same_image(before, after))
+
+    def test_storage_extension_requires_opt_in_and_checks_existing_size(self):
+        machine = dict(id="existing", config=dict(mounts=[dict(path="/data", volume="original")]))
+        with patch.object(deploy_fly, "run") as run:
+            deploy_fly.approved_storage_extension(machine, "original", "")
+            run.assert_not_called()
+            with self.assertRaises(RuntimeError): deploy_fly.approved_storage_extension(machine, "original", "3")
+            run.assert_not_called()
+        with patch.object(deploy_fly, "run", return_value=json.dumps(dict(size_gb=4))) as run:
+            with self.assertRaises(RuntimeError): deploy_fly.approved_storage_extension(machine, "original", "2")
+            self.assertEqual(run.call_count, 1)
+        replies = [json.dumps(dict(size_gb=1)), "", json.dumps(dict(size_gb=2)), json.dumps([machine])]
+        with patch.object(deploy_fly, "run", side_effect=replies) as run:
+            deploy_fly.approved_storage_extension(machine, "original", "2")
+            self.assertEqual(run.call_args_list[1].args[0], ["volumes", "extend", "original", "--size", "2", "--yes"])
+
+    def test_private_result_poll_retries_a_transient_exec_timeout(self):
+        calls = []
+        def fly(args, **kwargs):
+            calls.append(args)
+            if len(calls) == 2: raise RuntimeError("Fly exec deadline_exceeded")
+            output = {} if len(calls) == 1 else dict(exit_code=0, stdout=json.dumps(dict(integrity="ok")))
+            return json.dumps(dict(exit_code=0, stdout=json.dumps(output)))
+        with patch.object(deploy_fly, "run", side_effect=fly), patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", side_effect=OSError):
+            self.assertEqual(deploy_fly.remote("local-machine", "model"), {"integrity": "ok"})
+        self.assertEqual(sum("subprocess.Popen" in call[3] for call in calls), 1)
+
+    def test_actual_remote_helper_fits_the_fly_exec_payload_limit(self):
+        calls = []
+        def fly(args, **kwargs):
+            calls.append(args)
+            self.assertLess(len(args[3].encode()), 16000)
+            output = {} if len(calls) == 1 else dict(exit_code=0, stdout=json.dumps(dict(integrity="ok")))
+            return json.dumps(dict(exit_code=0, stdout=json.dumps(output)))
+        with patch.object(deploy_fly, "run", side_effect=fly), patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", side_effect=OSError):
+            self.assertEqual(deploy_fly.remote("local-machine", "model"), {"integrity": "ok"})
+
+    def test_rollout_requires_a_distinct_household_secret_before_fly_operations(self):
+        for household in ("", "short", "deployment-secret-" * 3):
+            with patch.dict(os.environ, FLY_API_TOKEN="deployment-secret-" * 3, MOBILE_API_TOKEN=household), patch.object(deploy_fly, "run") as fly:
+                with self.assertRaises(RuntimeError):
+                    deploy_fly.main()
+                fly.assert_not_called()
+
+    def test_remote_check_survives_a_detached_command_and_returns_private_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scripts = Path(folder) / "scripts"
+            scripts.mkdir()
+            (scripts / "fly_sqlite_guard.py").write_text('import json, time; time.sleep(.05); print(json.dumps({"integrity": "ok"}))')
+            def execute_locally(args, **kwargs):
+                process = subprocess.run(shlex.split(args[3]), text=True, capture_output=True, timeout=5)
+                return json.dumps(dict(exit_code=process.returncode, stdout=process.stdout))
+            with patch.object(deploy_fly, "ROOT", Path(folder)), patch.object(deploy_fly, "run", side_effect=execute_locally), patch.object(deploy_fly, "urlopen", side_effect=OSError):
+                self.assertEqual(deploy_fly.remote("local-machine", "test"), {"integrity": "ok"})
+
+    def test_identical_backups_share_bytes_but_keep_all_restore_manifests(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            content = b"private restore content" * 1000
+            checksum = hashlib.sha256(content).hexdigest()
+            canonical = folder / "first.db.gz"
+            guard.gzip_copy(self._backup_fixture(folder, "first.db", content), canonical)
+            manifests = []
+            for index, (name, value) in enumerate((("first.db.gz", content), ("second.db", content), ("third.db.gz", content), ("different.db", b"unique"))):
+                path = folder / name
+                if name == "third.db.gz": path.write_bytes(gzip.compress(value))
+                elif name != "first.db.gz": path.write_bytes(value)
+                saved = dict(backup_path=str(path), source_path="/data/meals.db", sha256=hashlib.sha256(value).hexdigest())
+                if name.endswith(".gz"): saved.update(compression="gzip", archive_sha256=guard.file_digest(path))
+                manifest = folder / ("before-android-" + str(index) + ".json")
+                guard.write_manifest(manifest, saved); manifests.append(manifest)
+            # A false claimed digest must never cause removal of different bytes.
+            corrupt = folder / "corrupt.db"; corrupt.write_bytes(b"other data")
+            guard.write_manifest(folder / "before-android-corrupt.json", dict(backup_path=str(corrupt), source_path="/data/meals.db", sha256=checksum))
+            guard.consolidate_identical_backups(folder)
+            for manifest in manifests[:3]:
+                saved = json.loads(manifest.read_text())
+                self.assertEqual(gzip.decompress(Path(saved["backup_path"]).read_bytes()), content)
+                self.assertEqual(manifest.stat().st_mode & 0o777, 0o600)
+            self.assertFalse((folder / "second.db").exists())
+            self.assertFalse((folder / "third.db.gz").exists())
+            self.assertEqual((folder / "different.db").read_bytes(), b"unique")
+            self.assertEqual(corrupt.read_bytes(), b"other data")
+            guard.consolidate_identical_backups(folder)
+            self.assertTrue(canonical.is_file())
+
+    @staticmethod
+    def _backup_fixture(folder, name, value):
+        path = folder / name; path.write_bytes(value)
+        return path
+
+    def test_online_backup_preserves_records_and_is_private(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "meals.db"
+            with sqlite3.connect(path) as db:
+                db.executescript('''
+                    CREATE TABLE user (id INTEGER PRIMARY KEY, username TEXT,
+                        target_calories REAL, target_protein REAL, target_carbs REAL, target_fat REAL);
+                    CREATE TABLE meal (id INTEGER PRIMARY KEY, user_id INTEGER, date TEXT,
+                        weight REAL, calories REAL, protein REAL, carbs REAL, fat REAL,
+                        image_data TEXT, psoriasis_score REAL);
+                    INSERT INTO user VALUES (1, 'Private name', 2000, 100, 200, 60);
+                    INSERT INTO meal VALUES (1, 1, '2026-11-10', 200, 400, 20, 30, 10, 'photo', 8);
+                ''')
+            before = path.read_bytes()
+            with patch.dict(os.environ, DATABASE_URL="sqlite:///" + str(path)):
+                result = guard.backup(root)
+            backup = Path(result["backup_path"])
+            self.assertEqual(path.read_bytes(), before)
+            with sqlite3.connect(path) as source, sqlite3.connect(backup) as saved:
+                self.assertEqual(list(source.iterdump()), list(saved.iterdump()))
+            self.assertEqual(result["counts"], {"user": 1, "meal": 1})
+            self.assertEqual(result["sha256"], hashlib.sha256(backup.read_bytes()).hexdigest())
+            self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+            manifest = backup.with_suffix(".json")
+            self.assertEqual(manifest.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(manifest.read_text()), result)
+            with patch.dict(os.environ, DATABASE_URL="sqlite:///" + str(path)):
+                with patch.object(guard.shutil, "disk_usage", return_value=type("Space", (), {"free": 0})()):
+                    self.assertEqual(guard.backup(root), result)
+                with sqlite3.connect(path) as changed:
+                    changed.execute("UPDATE meal SET calories=500 WHERE id=1")
+                with patch.object(guard.shutil, "disk_usage", return_value=type("Space", (), {"free": 0})()):
+                    with self.assertRaises(RuntimeError):
+                        guard.backup(root)
+            with patch.dict(os.environ, DATABASE_URL="sqlite:////tmp/missing-meals.db"):
+                with self.assertRaises(RuntimeError):
+                    guard.database_path(root)
+            with tempfile.TemporaryDirectory() as scratch:
+                original_backup = backup.read_bytes()
+                guard.compress_old_backup(manifest, Path(root) / "backups", Path(scratch), root)
+                archived = json.loads(manifest.read_text())
+                self.assertEqual(gzip.decompress(Path(archived["backup_path"]).read_bytes()), original_backup)
+                self.assertEqual(archived["compression"], "gzip")
+
+    def test_low_volume_space_keeps_a_verified_compressed_current_backup(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "meals.db"
+            with sqlite3.connect(path) as db:
+                db.executescript('''
+                    CREATE TABLE user (id INTEGER PRIMARY KEY, username TEXT,
+                        target_calories REAL, target_protein REAL, target_carbs REAL, target_fat REAL);
+                    CREATE TABLE meal (id INTEGER PRIMARY KEY, user_id INTEGER, date TEXT,
+                        weight REAL, calories REAL, protein REAL, carbs REAL, fat REAL,
+                        image_data TEXT, psoriasis_score REAL);
+                    INSERT INTO user VALUES (1, 'Private name', 2000, 100, 200, 60);
+                    INSERT INTO meal VALUES (1, 1, '2026-11-10', 200, 400, 20, 30, 10, '', 8);
+                ''')
+                db.execute("UPDATE meal SET image_data=?", ("A" * 150000,))
+            before = path.read_bytes()
+            def space(location):
+                free = 64 * 1024 * 1024 + 4096 if str(location) == root else 2 * 1024 * 1024 * 1024
+                return type("Space", (), {"free": free})()
+            with patch.dict(os.environ, DATABASE_URL="sqlite:///" + str(path)), patch.object(guard.shutil, "disk_usage", side_effect=space):
+                result = guard.backup(root)
+                reused = guard.backup(root)
+            self.assertEqual(reused, result)
+            self.assertEqual(result["compression"], "gzip")
+            archive = Path(result["backup_path"])
+            self.assertEqual(hashlib.sha256(gzip.decompress(archive.read_bytes())).hexdigest(), result["sha256"])
+            self.assertEqual(archive.stat().st_mode & 0o777, 0o600)
+            self.assertTrue(Path(result["manifest_path"]).is_file())
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_config_preserves_mounts_and_existing_environment(self):
+        original = dict(app=deploy_fly.APP, processes={"web": "old"},
+            mounts=[dict(source="meal_data", destination="/data")],
+            http_service=dict(internal_port=8080), env=dict(KEEP="existing"))
+        saved = copy.deepcopy(original)
+        config, port = deploy_fly.configuration(original, "revision", "accessible-model")
+        self.assertEqual(port, 8080)
+        self.assertEqual(config["mounts"], original["mounts"])
+        self.assertEqual(config["env"]["KEEP"], "existing")
+        self.assertEqual(config["env"]["RELEASE_COMMIT"], "revision")
+        self.assertEqual(config["env"]["MEAL_ANALYSIS_MODEL"], "accessible-model")
+        self.assertEqual(config["build"]["dockerfile"], "Dockerfile")
+        self.assertTrue((deploy_fly.ROOT / config["build"]["dockerfile"]).is_file())
+        self.assertIn('python -c "import app"', config["processes"]["web"])
+        self.assertEqual(config["http_service"]["auto_stop_machines"], "off")
+        self.assertEqual(config["http_service"]["min_machines_running"], 1)
+        self.assertEqual(original, saved)
+        del original["mounts"]
+        with self.assertRaises(RuntimeError):
+            deploy_fly.configuration(original, "revision", "model")
+
+    def test_refuses_unexpected_machine_or_volume_layout(self):
+        for machines in ([], [{}, {}], [dict(config={})]):
+            with self.assertRaises(RuntimeError):
+                deploy_fly.primary(machines)
+
+
+if __name__ == "__main__":
+    unittest.main()

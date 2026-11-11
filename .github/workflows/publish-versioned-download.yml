@@ -1,0 +1,44 @@
+name: Publish clearly versioned Android downloads
+on:
+  push:
+    branches: [codex/android-meal-tracker]
+    paths: [.github/workflows/publish-versioned-download.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify and copy the existing signed v2.0.3 build
+        run: |
+          gh release download android-test-2026-11-11-trends --pattern everyday-meals-debug.apk --dir bundle
+          cd bundle
+          printf '%s\n' '91c3fdd5ec5599fa19116713e474a7f4e93d19566b1394078a83c0d6ce1b3f20  everyday-meals-debug.apk' | sha256sum --check
+          mv everyday-meals-debug.apk everyday-meals-2.0.3-with-trends.apk
+          python - <<'PY'
+          import zipfile
+          name = 'everyday-meals-2.0.3-with-trends.apk'
+          with zipfile.ZipFile('everyday-meals-2.0.3-with-trends.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              archive.write(name)
+              archive.writestr('INSTALL-2.0.3.txt', '''Everyday Meals 2.0.3 - with Trends
+
+          Open everyday-meals-2.0.3-with-trends.apk from THIS extracted folder.
+          After opening Everyday Meals, connect to the server with your household token.
+          Once connected, the bottom navigation has Today, Add meal, History, Ideas, Trends.
+          Daily weighted scores: Today > calorie card > Weighted scores.
+          Period weighted scores: Trends > Period averages.
+          Check Android Settings > Apps > Everyday Meals > App info: version 2.0.3.
+
+          This is the same signed v2.0.3 APK as the original download, with a distinct
+          filename to distinguish it from older installers. Saved server meals remain.
+          If Android reports a signature conflict with an older test build, finish
+          unsaved meals and save your household token before uninstalling/reinstalling.
+          ''')
+          PY
+          sha256sum everyday-meals-2.0.3-with-trends.apk > everyday-meals-2.0.3-with-trends.apk.sha256
+          gh release upload android-test-2026-11-11-trends everyday-meals-2.0.3-with-trends.apk everyday-meals-2.0.3-with-trends.zip everyday-meals-2.0.3-with-trends.apk.sha256 --clobber
