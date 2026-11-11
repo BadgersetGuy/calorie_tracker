@@ -62,6 +62,42 @@ class DeploymentSafetyTests(unittest.TestCase):
             with patch.object(deploy_fly, "ROOT", Path(folder)), patch.object(deploy_fly, "run", side_effect=execute_locally), patch.object(deploy_fly.time, "sleep"), patch.object(deploy_fly, "urlopen", side_effect=OSError):
                 self.assertEqual(deploy_fly.remote("local-machine", "test"), {"integrity": "ok"})
 
+    def test_identical_backups_share_bytes_but_keep_all_restore_manifests(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            content = b"private restore content" * 1000
+            checksum = hashlib.sha256(content).hexdigest()
+            canonical = folder / "first.db.gz"
+            guard.gzip_copy(self._backup_fixture(folder, "first.db", content), canonical)
+            manifests = []
+            for index, (name, value) in enumerate((("first.db.gz", content), ("second.db", content), ("third.db.gz", content), ("different.db", b"unique"))):
+                path = folder / name
+                if name == "third.db.gz": path.write_bytes(gzip.compress(value))
+                elif name != "first.db.gz": path.write_bytes(value)
+                saved = dict(backup_path=str(path), source_path="/data/meals.db", sha256=hashlib.sha256(value).hexdigest())
+                if name.endswith(".gz"): saved.update(compression="gzip", archive_sha256=guard.file_digest(path))
+                manifest = folder / ("before-android-" + str(index) + ".json")
+                guard.write_manifest(manifest, saved); manifests.append(manifest)
+            # A false claimed digest must never cause removal of different bytes.
+            corrupt = folder / "corrupt.db"; corrupt.write_bytes(b"other data")
+            guard.write_manifest(folder / "before-android-corrupt.json", dict(backup_path=str(corrupt), source_path="/data/meals.db", sha256=checksum))
+            guard.consolidate_identical_backups(folder)
+            for manifest in manifests[:3]:
+                saved = json.loads(manifest.read_text())
+                self.assertEqual(gzip.decompress(Path(saved["backup_path"]).read_bytes()), content)
+                self.assertEqual(manifest.stat().st_mode & 0o777, 0o600)
+            self.assertFalse((folder / "second.db").exists())
+            self.assertFalse((folder / "third.db.gz").exists())
+            self.assertEqual((folder / "different.db").read_bytes(), b"unique")
+            self.assertEqual(corrupt.read_bytes(), b"other data")
+            guard.consolidate_identical_backups(folder)
+            self.assertTrue(canonical.is_file())
+
+    @staticmethod
+    def _backup_fixture(folder, name, value):
+        path = folder / name; path.write_bytes(value)
+        return path
+
     def test_online_backup_preserves_records_and_is_private(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "meals.db"

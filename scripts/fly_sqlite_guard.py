@@ -119,6 +119,46 @@ def compress_old_backup(manifest, folder, scratch, root):
     finally:
         compressed.unlink(missing_ok=True)
 
+def consolidate_identical_backups(folder):
+    """Share verified identical backup bytes; retain every dated manifest."""
+    groups = {}
+    manifests = sorted(folder.glob("before-android-*.json"))
+    for manifest in manifests:
+        try:
+            saved = json.loads(manifest.read_text())
+            path = Path(saved["backup_path"])
+            if path.resolve().parent != folder.resolve() or not path.is_file(): continue
+            groups.setdefault((saved["source_path"], saved["sha256"]), []).append((manifest, saved, path))
+        except (OSError, ValueError, KeyError): continue
+    for (_, checksum), entries in groups.items():
+        archives = [entry for entry in entries if entry[1].get("compression") == "gzip"]
+        if not archives: continue
+        canonical_manifest, canonical, target = archives[0]
+        try:
+            archive_hash = file_digest(target)
+            if archive_hash != canonical.get("archive_sha256") or gzip_digest(target) != checksum: continue
+        except (OSError, EOFError): continue
+        for manifest, saved, duplicate in entries:
+            if duplicate == target: continue
+            try:
+                actual = gzip_digest(duplicate) if saved.get("compression") == "gzip" else file_digest(duplicate)
+                if actual != checksum: continue
+                saved.update(backup_path=str(target), compression="gzip", archive_sha256=archive_hash)
+                write_manifest(manifest, saved)
+            except (OSError, EOFError): continue
+        # Unlink only verified duplicates whose dated manifests now all use the
+        # canonical archive. A crash before unlink merely leaves an extra copy.
+        referenced = set()
+        unreadable = False
+        for manifest in manifests:
+            try: referenced.add(Path(json.loads(manifest.read_text())["backup_path"]))
+            except (OSError, ValueError, KeyError): unreadable = True
+        if unreadable: continue
+        for _, saved, duplicate in entries:
+            if duplicate == target or duplicate in referenced or not duplicate.is_file(): continue
+            actual = gzip_digest(duplicate) if duplicate.suffix == ".gz" else file_digest(duplicate)
+            if actual == checksum: duplicate.unlink()
+
 def backup(root="/data"):
     path = database_path(root)
     folder = Path(root) / "backups"
@@ -149,6 +189,7 @@ def backup(root="/data"):
                 return saved
         except (OSError, ValueError, KeyError, sqlite3.Error):
             continue
+    consolidate_identical_backups(folder)
     size = path.stat().st_size
     if shutil.disk_usage(root).free < size + 64 * 1024 * 1024:
         return compressed_backup(path, folder, root, size)
